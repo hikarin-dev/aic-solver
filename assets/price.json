@@ -1,5 +1,6 @@
 {
   "_comment": "Default sell prices in ¤/unit. Loaded by the calculator on first run if no localStorage state exists. Edit freely; missing items default to 0.",
+  "item_copper_enr2_cmpt": 70,
   "item_proc_battery_5": 54,
   "item_copper_enr_cmpt": 48,
   "item_xiranite_enr_powder": 27,

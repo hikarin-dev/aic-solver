@@ -1,6 +1,10 @@
 # Raw game data source
 EndfieldData-master/
 
+# Internal tooling (not shipped to end users)
+tools/
+main.obj
+
 # Dependencies
 node_modules/
 

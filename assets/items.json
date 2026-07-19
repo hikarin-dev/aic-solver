@@ -216,6 +216,24 @@
     "asTarget": true
   },
   {
+    "id": "item_copper_enr2",
+    "name": "Pyrrolite",
+    "itemType": "Material",
+    "iconFile": "item_copper_enr2.webp",
+    "tier": 3,
+    "isLiquid": false,
+    "asTarget": true
+  },
+  {
+    "id": "item_copper_enr2_cmpt",
+    "name": "Pyrrolite Part",
+    "itemType": "Material",
+    "iconFile": "item_copper_enr2_cmpt.webp",
+    "tier": 4,
+    "isLiquid": false,
+    "asTarget": true
+  },
+  {
     "id": "item_copper_enr_bottle",
     "name": "Hetonite Bottle",
     "itemType": "Material",
@@ -230,6 +248,15 @@
     "itemType": "Material",
     "iconFile": "item_copper_enr_cmpt.webp",
     "tier": 4,
+    "isLiquid": false,
+    "asTarget": true
+  },
+  {
+    "id": "item_copper_jar",
+    "name": "Cuprium Canister",
+    "itemType": "Material",
+    "iconFile": "item_copper_jar.webp",
+    "tier": 3,
     "isLiquid": false,
     "asTarget": true
   },
@@ -346,6 +373,15 @@
     "name": "Hetonite Component",
     "itemType": "Material",
     "iconFile": "item_equip_script_4_2.webp",
+    "tier": 4,
+    "isLiquid": false,
+    "asTarget": true
+  },
+  {
+    "id": "item_equip_script_4_3",
+    "name": "Pyrrolite Component",
+    "itemType": "Material",
+    "iconFile": "item_equip_script_4_3.webp",
     "tier": 4,
     "isLiquid": false,
     "asTarget": true
@@ -952,6 +988,159 @@
     "tier": 4,
     "isLiquid": false,
     "asTarget": false
+  },
+  {
+    "id": "item_filter_core",
+    "name": "Separator Core",
+    "itemType": "Material",
+    "iconFile": "item_filter_core.webp",
+    "tier": 3,
+    "isLiquid": false,
+    "asTarget": true
+  },
+  {
+    "id": "item_gas_acid",
+    "name": "Acridgen",
+    "itemType": "Material",
+    "iconFile": "item_gas_acid.webp",
+    "tier": 2,
+    "isLiquid": true,
+    "asTarget": true
+  },
+  {
+    "id": "item_gas_copper",
+    "name": "Cuprium Gas",
+    "itemType": "Material",
+    "iconFile": "item_gas_copper.webp",
+    "tier": 3,
+    "isLiquid": true,
+    "asTarget": true
+  },
+  {
+    "id": "item_gas_copper_enr",
+    "name": "Hetonite Gas",
+    "itemType": "Material",
+    "iconFile": "item_gas_copper_enr.webp",
+    "tier": 3,
+    "isLiquid": true,
+    "asTarget": true
+  },
+  {
+    "id": "item_gas_copper_enr2",
+    "name": "Pyrrolite Gas",
+    "itemType": "Material",
+    "iconFile": "item_gas_copper_enr2.webp",
+    "tier": 4,
+    "isLiquid": true,
+    "asTarget": true
+  },
+  {
+    "id": "item_gas_inert",
+    "name": "Inergen",
+    "itemType": "Material",
+    "iconFile": "item_gas_inert.webp",
+    "tier": 1,
+    "isLiquid": true,
+    "asTarget": true
+  },
+  {
+    "id": "item_gas_water",
+    "name": "Aquagen",
+    "itemType": "Material",
+    "iconFile": "item_gas_water.webp",
+    "tier": 2,
+    "isLiquid": true,
+    "asTarget": true
+  },
+  {
+    "id": "item_gas_xiranite",
+    "name": "Xiragen",
+    "itemType": "Material",
+    "iconFile": "item_gas_xiranite.webp",
+    "tier": 3,
+    "isLiquid": true,
+    "asTarget": true
+  },
+  {
+    "id": "item_gas_xiranite_enr",
+    "name": "Heavy Xiragen",
+    "itemType": "Material",
+    "iconFile": "item_gas_xiranite_enr.webp",
+    "tier": 3,
+    "isLiquid": true,
+    "asTarget": true
+  },
+  {
+    "id": "item_gasjar_copper_gas_acid",
+    "name": "Cuprium Canister",
+    "itemType": "Material",
+    "iconFile": "item_gasjar_copper_gas_acid.webp",
+    "tier": 3,
+    "isLiquid": false,
+    "asTarget": true
+  },
+  {
+    "id": "item_gasjar_copper_gas_copper",
+    "name": "Cuprium Canister",
+    "itemType": "Material",
+    "iconFile": "item_gasjar_copper_gas_copper.webp",
+    "tier": 3,
+    "isLiquid": false,
+    "asTarget": true
+  },
+  {
+    "id": "item_gasjar_copper_gas_copper_enr",
+    "name": "Cuprium Canister",
+    "itemType": "Material",
+    "iconFile": "item_gasjar_copper_gas_copper_enr.webp",
+    "tier": 3,
+    "isLiquid": false,
+    "asTarget": true
+  },
+  {
+    "id": "item_gasjar_copper_gas_copper_enr2",
+    "name": "Cuprium Canister",
+    "itemType": "Material",
+    "iconFile": "item_gasjar_copper_gas_copper_enr2.webp",
+    "tier": 3,
+    "isLiquid": false,
+    "asTarget": true
+  },
+  {
+    "id": "item_gasjar_copper_gas_inert",
+    "name": "Cuprium Canister",
+    "itemType": "Material",
+    "iconFile": "item_gasjar_copper_gas_inert.webp",
+    "tier": 3,
+    "isLiquid": false,
+    "asTarget": true
+  },
+  {
+    "id": "item_gasjar_copper_gas_water",
+    "name": "Cuprium Canister",
+    "itemType": "Material",
+    "iconFile": "item_gasjar_copper_gas_water.webp",
+    "tier": 3,
+    "isLiquid": false,
+    "asTarget": true
+  },
+  {
+    "id": "item_gasjar_copper_gas_xiranite",
+    "name": "Cuprium Canister",
+    "itemType": "Material",
+    "iconFile": "item_gasjar_copper_gas_xiranite.webp",
+    "tier": 3,
+    "isLiquid": false,
+    "asTarget": true
+  },
+  {
+    "id": "item_gasjar_copper_gas_xiranite_enr",
+    "name": "Cuprium Canister",
+    "itemType": "Material",
+    "iconFile": "item_gasjar_copper_gas_xiranite_enr.webp",
+    "tier": 3,
+    "isLiquid": false,
+    "asTarget": true
   },
   {
     "id": "item_glass_bottle",
@@ -1600,5 +1789,15 @@
     "tier": 2,
     "isLiquid": false,
     "asTarget": true
+  },
+  {
+    "id": "resource_xiranite_gas_vent",
+    "name": "Xiranite Gas Vent",
+    "itemType": "Resource",
+    "iconFile": "item_gas_xiranite.webp",
+    "tier": 1,
+    "isLiquid": false,
+    "asTarget": false,
+    "rawUnit": "vent(s)"
   }
 ]
