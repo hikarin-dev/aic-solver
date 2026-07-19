@@ -9134,7 +9134,7 @@
       "inputs": [
         {
           "itemId": "resource_xiranite_gas_vent",
-          "amount": 0.05
+          "amount": 1.0
         }
       ],
       "outputs": [

@@ -1041,7 +1041,8 @@
     "iconFile": "item_gas_inert.webp",
     "tier": 1,
     "isLiquid": true,
-    "asTarget": true
+    "asTarget": true,
+    "rawLimitName": "Inergen (Vent)"
   },
   {
     "id": "item_gas_water",
@@ -1792,12 +1793,12 @@
   },
   {
     "id": "resource_xiranite_gas_vent",
-    "name": "Xiranite Gas Vent",
+    "name": "Xigagen (Vent)",
     "itemType": "Resource",
     "iconFile": "item_gas_xiranite.webp",
     "tier": 1,
     "isLiquid": false,
     "asTarget": false,
-    "rawUnit": "vent(s)"
+    "rawUnit": "/min"
   }
 ]

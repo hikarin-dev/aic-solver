@@ -1,25 +1,3 @@
 {
-  "production": [
-    { "id": "item_proc_battery_5",     "recipeId": "tools_proc_battery_5_1",              "rate": 14.74998,             "locked": false, "optimized": true, "maxRate": 14.75 },
-    { "id": "item_copper_enr_cmpt",    "recipeId": "component_copper_enr_cmpt_1",          "rate": 3.2500020000000003,   "locked": false, "optimized": true, "maxRate": 6 },
-    { "id": "item_xiranite_enr_powder","recipeId": "xiranite_oven_xiranite_enr_powder_1",  "rate": 12.967740000000001,  "locked": false, "optimized": true, "maxRate": 19.2258064516129 },
-    { "id": "item_proc_battery_4",     "recipeId": "tools_proc_battery_4_1",               "rate": 0,                   "locked": false, "optimized": true, "maxRate": 19.6666666666667 },
-    { "id": "item_bottled_rec_hp_5",   "recipeId": "tools_proc_rec_hp_5_1",                "rate": 5.500002,            "locked": false, "optimized": true, "maxRate": 12 },
-    { "id": "item_bottled_rec_hp_4",   "recipeId": "tools_proc_rec_hp_4_1",                "rate": 0,                   "locked": false, "optimized": true, "maxRate": 4.5 },
-    { "id": "item_xiranite_powder",    "recipeId": "xiranite_oven_xiranite_powder_1",       "rate": 0,                   "locked": false, "optimized": true, "maxRate": 360 }
-  ],
-  "rawLimits": [
-    { "matId": "item_originium_ore", "cap": 590 },
-    { "matId": "item_iron_ore",      "cap": 90  },
-    { "matId": "item_copper_ore",    "cap": 240 }
-  ],
-  "facilityLimits": [
-    { "id": "s9d5gdij", "gameFacilityId": "xiranite_oven_1", "name": "Forge of the Sky", "cap": 12 }
-  ],
-  "powerBatteries": [
-    { "matId": "item_proc_battery_5", "rate": 3 }
-  ],
-  "prices": {},
-  "autoSolve": true,
-  "outpostCost": 59688
+  "config": "#t=i:14.444,51:14.75,k:0,58:23.556,50:0,9:0,8:2.313,5a:6.739:xiranite_oven_xiranite_powder_1,z:0&rl=43:540,3n:120,n:420,5b:100,30:460&ru=2&fl=l:12&as=1&mt=1&c=1&oc=59688"
 }

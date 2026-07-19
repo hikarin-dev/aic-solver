@@ -76,7 +76,7 @@ function getSolverWeight(key) {
 /* ═══════════════════════════════════════════════
    STATE
    production[]: { id, recipeId, rate, locked, optimized }
-   rawLimits[]:  { matId, cap }
+   rawLimits[]:  { matId, cap }  (all caps are throughput per minute)
    facilityLimits[]: { id, gameFacilityId, name, cap, integerOnly }
      integerOnly: when true, all x_ri for this facility are declared as
      integers in the LP General section (MIP solve).
@@ -100,8 +100,41 @@ const RAW_DEFAULT_CAPS = {
   'item_iron_ore':      90,
   'item_quartz_sand':   240,
   'item_copper_ore':    240,
-  'resource_xiranite_gas_vent': 1,
+  'resource_xiranite_gas_vent': 20,
 };
+
+const RAW_LIMIT_SCHEMA_VERSION = 2;
+const XIGAGEN_VENT_ID = 'resource_xiranite_gas_vent';
+
+// Canonical display order for raw resources — used by the side nav list, the
+// main-page usage bars, and the add-raw picker. Ores, then liquids, then gases.
+// Anything not listed sorts last (alphabetically, as a fallback tiebreaker).
+const RAW_DISPLAY_ORDER = [
+  'item_originium_ore',          // Originium
+  'item_quartz_sand',            // Amethyst
+  'item_iron_ore',               // Ferrium
+  'item_copper_ore',             // Cuprium
+  'item_liquid_water',           // Water
+  'item_liquid_acid',            // Acid
+  'item_gas_inert',              // Inergen
+  'resource_xiranite_gas_vent',  // Xigagen
+];
+const rawOrderIndex = id => {
+  const i = RAW_DISPLAY_ORDER.indexOf(id);
+  return i === -1 ? RAW_DISPLAY_ORDER.length : i;
+};
+
+// Raw limits used to store Xigagen as a vent count (1 == 20/min). Keep old
+// saved states and shared URLs equivalent after changing the UI to throughput.
+function migrateRawLimits(limits, schemaVersion) {
+  const legacyVentUnits = Number(schemaVersion || 1) < RAW_LIMIT_SCHEMA_VERSION;
+  return (Array.isArray(limits) ? limits : []).map(limit => {
+    const copy = { ...limit };
+    if (legacyVentUnits && copy.matId === XIGAGEN_VENT_ID)
+      copy.cap = (Number(copy.cap) || 0) * 20;
+    return copy;
+  });
+}
 
 /* ═══════════════════════════════════════════════
    PERSISTENCE
@@ -126,7 +159,8 @@ function _doSave() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       production, rawLimits, facilityLimits, powerBatteries,
       prices, autoSolve, prioritizeUnsellable: prioritizeUnsellableOn(), outpostCost,
-      autoMetaTransfer, roundUpFacilities
+      autoMetaTransfer, roundUpFacilities,
+      rawLimitSchemaVersion: RAW_LIMIT_SCHEMA_VERSION
     }));
     encodeStateToUrl();
   } catch (e) {}
@@ -135,7 +169,7 @@ function _doSave() {
 /* ═══════════════════════════════════════════════
    URL STATE
    Side-pane config is encoded as readable hash params:
-     #t=item:rate,item:rate!&rl=mat:cap&fl=fac:cap[:i]&b=mat:rate&as=0&oc=59688
+     #t=item:rate,item:rate!&rl=mat:cap&ru=2&fl=fac:cap[:i]&b=mat:rate&as=0&oc=59688
    Append ! to a production entry to mark it locked.
    Append :recipe_id to a production entry to override the default recipe.
    Append :i to a facility entry to mark it integer-only (MIP solve).
@@ -247,11 +281,13 @@ function encodeStateToUrl() {
       }).join(','));
     }
 
-    if (rawLimits.length)
+    if (rawLimits.length) {
       parts.push('rl=' + rawLimits.map(r => {
         const key = itemIdxById.get(r.matId)?.toString(36) ?? r.matId;
         return key + ':' + r.cap;
       }).join(','));
+      parts.push('ru=' + RAW_LIMIT_SCHEMA_VERSION);
+    }
 
     if (facilityLimits.length)
       parts.push('fl=' + facilityLimits.map(f => {
@@ -278,9 +314,8 @@ function encodeStateToUrl() {
   } catch (e) {}
 }
 
-function decodeStateFromUrl() {
+function decodeStateFromUrl(hash = location.hash) {
   try {
-    const hash = location.hash;
     if (!hash || hash.length <= 1) return false;
     const map = {};
     decodeURIComponent(hash.slice(1)).split('&').forEach(part => {
@@ -310,10 +345,11 @@ function decodeStateFromUrl() {
     }
 
     if (map.rl) {
-      rawLimits = map.rl.split(',').filter(Boolean).map(seg => {
+      const decodedRawLimits = map.rl.split(',').filter(Boolean).map(seg => {
         const [tok, cap] = seg.split(':');
         return { matId: resolveItemId(tok), cap: parseFloat(cap) || 0 };
       }).filter(r => r.matId);
+      rawLimits = migrateRawLimits(decodedRawLimits, map.ru);
     }
 
     if (map.fl) {
@@ -351,10 +387,21 @@ function decodeStateFromUrl() {
 }
 
 const VISITED_KEY = 'epc_visited';
+const VERSION_KEY  = 'epc_version';
+const APP_VERSION  = '1.4';
+
+/* The version-gated default config lives in initialization.json as a single
+   readable hash string ("config"), the same format as a shared link (parsed by
+   decodeStateFromUrl). To change the default: build a config in the app, copy
+   its URL, and paste the hash into initialization.json — no code change needed.
+   Base36 item/facility indices are version-specific, so regenerate the hash if
+   item/facility ordering changes, and bump APP_VERSION to re-apply it to every
+   user whose stored version differs (replacing their saved build). */
 
 function _applyStateSnapshot(s) {
   if (Array.isArray(s.production)) production = s.production;
-  if (Array.isArray(s.rawLimits)) rawLimits = s.rawLimits;
+  if (Array.isArray(s.rawLimits))
+    rawLimits = migrateRawLimits(s.rawLimits, s.rawLimitSchemaVersion);
   if (Array.isArray(s.facilityLimits)) facilityLimits = s.facilityLimits;
   if (Array.isArray(s.powerBatteries)) powerBatteries = s.powerBatteries;
   if (s.prices && typeof s.prices === 'object') _pendingUrlPrices = s.prices;
@@ -374,11 +421,17 @@ function _applyStateSnapshot(s) {
 async function loadState() {
   if (decodeStateFromUrl()) return; // URL hash takes priority over localStorage
 
-  if (!localStorage.getItem(VISITED_KEY)) {
+  // Version-gated default: any user whose stored version differs from the
+  // current app version — brand-new visitors and users upgrading from an
+  // older version alike — is shown this version's default config, replacing
+  // any prior saved build. Once v1.4 is stored, returning users load their save.
+  if (localStorage.getItem(VERSION_KEY) !== APP_VERSION) {
+    localStorage.setItem(VERSION_KEY, APP_VERSION);
     localStorage.setItem(VISITED_KEY, '1');
     try {
       const r = await fetch('initialization.json');
-      if (r.ok) _applyStateSnapshot(await r.json());
+      const data = r.ok ? await r.json() : null;
+      if (data?.config) decodeStateFromUrl(data.config);
     } catch (e) {}
     return;
   }
@@ -455,6 +508,10 @@ function icon(id) {
   if (!it) return '';
   return `<img src="assets/icons/items/${it.iconFile}" class="mat-icon" title="${it.name}">`;
 }
+function rawMaterialDisplayName(itemOrId) {
+  const item = typeof itemOrId === 'string' ? itemById[itemOrId] : itemOrId;
+  return item?.rawLimitName || item?.name || (typeof itemOrId === 'string' ? itemOrId : '');
+}
 function facIcon(typeId) {
   const file = facilityTypeById[typeId]?.iconFile || `${typeId}.webp`;
   return `<img src="assets/icons/facilities/${file}" class="mat-icon" onerror="this.style.visibility='hidden'">`;
@@ -519,14 +576,17 @@ function renderResources() {
     document.getElementById('res-pill').textContent = '0';
     return;
   }
-  rawLimits.forEach((rl, ri) => {
+  rawLimits
+    .map((rl, ri) => ({ rl, ri }))
+    .sort((a, b) => rawOrderIndex(a.rl.matId) - rawOrderIndex(b.rl.matId))
+    .forEach(({ rl, ri }) => {
     const it = itemById[rl.matId];
     if (!it) return;
     const d = document.createElement('div');
     d.className = 'item-row';
     d.style.gridTemplateColumns = 'auto 1fr 72px auto auto';
     d.style.gap = '0.375rem';
-    d.innerHTML = `${icon(rl.matId)}<span class="item-name">${it.name}</span>
+    d.innerHTML = `${icon(rl.matId)}<span class="item-name">${rawMaterialDisplayName(it)}</span>
       <input class="num-input" type="number" value="${rl.cap}" min="0"
         onchange="rawLimits[${ri}].cap=+this.value;invalidateChainCache();saveStateNow();recomputeMaxForRaw();renderProducts();if(autoSolveOn())runSolver();else runSolver(false,true)">
       <span class="prod-max-label">${it.rawUnit || '/min'}</span>
@@ -571,10 +631,12 @@ function filterRawSearch() {
   const dd = getRawPortal();
   const q = input.value.trim().toLowerCase();
   const limited = new Set(rawLimits.map(rl => rl.matId));
-  const available = itemsDB.filter(it => forcedRawSet.has(it.id) && !limited.has(it.id));
-  const matches = q ? available.filter(it => it.name.toLowerCase().includes(q)) : available;
+  const available = itemsDB
+    .filter(it => forcedRawSet.has(it.id) && !limited.has(it.id))
+    .sort((a, b) => rawOrderIndex(a.id) - rawOrderIndex(b.id));
+  const matches = q ? available.filter(it => rawMaterialDisplayName(it).toLowerCase().includes(q)) : available;
   dd.innerHTML = matches.length
-    ? matches.slice(0, 20).map(it => `<div class="mat-search-item" onmousedown="pickRawLimit('${it.id}')"><img src="assets/icons/items/${it.iconFile}" class="mat-icon"><span>${it.name}</span></div>`).join('')
+    ? matches.slice(0, 20).map(it => `<div class="mat-search-item" onmousedown="pickRawLimit('${it.id}')"><img src="assets/icons/items/${it.iconFile}" class="mat-icon"><span>${rawMaterialDisplayName(it)}</span></div>`).join('')
     : '<div class="mat-search-empty">No raw materials to add</div>';
   dd.style.display = 'block';
   positionPortal(dd, input);
@@ -1245,14 +1307,16 @@ function renderUsageBars(plan, incremental = false) {
     const importPct = Math.min(100 - localPct, flow.imported / scale * 100);
     const usePct = Math.min(100, flow.consumed / scale * 100);
     const netText = `${flow.net >= 0 ? '+' : ''}${flow.net.toFixed(1)}`;
+    const isRawResource = forcedRawSet.has(itemId) || hasCap || flow.raw > 1e-9;
+    const displayName = isRawResource ? rawMaterialDisplayName(item) : item.name;
     const nums = hasCap
-      ? `${used.toFixed(1)} / ${cap}${item.rawUnit ? ` ${item.rawUnit}` : ''}`
+      ? `${used.toFixed(1)} / ${cap} ${item.rawUnit || '/min'}`
       : `+${flow.generated.toFixed(1)} −${flow.consumed.toFixed(1)} = ${netText}`;
     const labelBadges = `${forcedRawSet.has(itemId) ? '<em>raw</em>' : ''}${flow.imported > 1e-9 ? '<em class="meta">meta</em>' : ''}`;
-    const tip = `${item.name}: generated ${flow.generated.toFixed(3)}/min (${flow.imported.toFixed(3)} imported), consumed ${flow.consumed.toFixed(3)}/min, net ${netText}/min`;
+    const tip = `${displayName}: generated ${flow.generated.toFixed(3)}/min (${flow.imported.toFixed(3)} imported), consumed ${flow.consumed.toFixed(3)}/min, net ${netText}/min`;
     resourceUpdates.set(itemId, { localPct, importPct, usePct, over, nums, tip });
     return `<div class="res-bar-row" data-resource-id="${itemId}">
-      <span class="res-bar-label" title="${tip}"><img src="assets/icons/items/${item.iconFile}" class="mat-icon" style="margin-right:3px;">${item.name}${labelBadges}</span>
+      <span class="res-bar-label" title="${tip}"><img src="assets/icons/items/${item.iconFile}" class="mat-icon" style="margin-right:3px;">${displayName}${labelBadges}</span>
       <div class="res-flow-track" title="${tip}">
         <div class="res-flow-half generated"><span class="res-flow-local" style="width:${localPct.toFixed(2)}%"></span><span class="res-flow-import" style="width:${importPct.toFixed(2)}%"></span></div>
         <div class="res-flow-half consumed"><span class="${over ? 'bar-over' : 'res-flow-consumed'}" style="width:${usePct.toFixed(2)}%"></span></div>
@@ -1278,7 +1342,9 @@ function renderUsageBars(plan, incremental = false) {
       return ar - br || (itemById[a]?.name || a).localeCompare(itemById[b]?.name || b);
     });
     const rawResources = orderedResources.filter(id =>
-      forcedRawSet.has(id) || rawCapMap[id] != null || (flows[id]?.raw || 0) > 1e-9);
+      forcedRawSet.has(id) || rawCapMap[id] != null || (flows[id]?.raw || 0) > 1e-9)
+      .sort((a, b) => rawOrderIndex(a) - rawOrderIndex(b)
+        || (itemById[a]?.name || a).localeCompare(itemById[b]?.name || b));
     const rawResourceSet = new Set(rawResources);
     const metaResources = orderedResources.filter(id =>
       !rawResourceSet.has(id) && (flows[id]?.imported || 0) > 1e-9);
@@ -1620,6 +1686,7 @@ function saveSnapshot() {
       powerBatteries: JSON.parse(JSON.stringify(powerBatteries)),
       autoMetaTransfer,
       roundUpFacilities,
+      rawLimitSchemaVersion: RAW_LIMIT_SCHEMA_VERSION,
       outpostCost,
     },
   };
@@ -1635,7 +1702,10 @@ function loadSnapshot(id) {
   if (!confirm(`Load "${snap.name}"?\nThis will replace your current setup (resources, facilities, production, batteries, outpost cost).`)) return;
 
   production     = JSON.parse(JSON.stringify(snap.state.production     || []));
-  rawLimits      = JSON.parse(JSON.stringify(snap.state.rawLimits      || []));
+  rawLimits      = migrateRawLimits(
+    JSON.parse(JSON.stringify(snap.state.rawLimits || [])),
+    snap.state.rawLimitSchemaVersion,
+  );
   facilityLimits = JSON.parse(JSON.stringify(snap.state.facilityLimits || []));
   powerBatteries = JSON.parse(JSON.stringify(snap.state.powerBatteries || []));
   autoMetaTransfer = !!snap.state.autoMetaTransfer;
