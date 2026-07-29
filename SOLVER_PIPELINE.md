@@ -315,8 +315,10 @@ remainders. The crucible building-count optimisation now lives in the
 the LP objective no longer needs to reason about physical buildings.
 
 `pinAll` (read-only solve) instead just minimises `Σ x_r` (total facilities).
-`solveLexicographic` survives as a legacy helper; the runtime packer does not
-call HiGHS.
+`solveLexicographic` survives as a legacy helper. The packer calls HiGHS on the
+settled solve (`packMultiFormula`) and stays heuristic during a drag
+(`packMultiFormulaFast`) — both yield identical item rates, so only the
+building/power split is deferred to settle.
 
 ### Surplus variables
 

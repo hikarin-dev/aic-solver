@@ -1806,14 +1806,11 @@ function packMultiFormula(items, solveFn, sink) {
     res = solveFn({ optimize: 'obj', opType: 'min', constraints, variables, generals, options: Object.keys(options).length ? options : undefined });
   } catch (e) { sink.warnings.push(`packMultiFormula: solver error: ${e}`); }
 
-  // 5. Fallback: one singleton building-stack per logical on its rep facility.
+  // 5. Bail without emitting so the caller can fall back to the fast packer,
+  //    which beats the old singleton-per-logical fallback in every case.
   if (!res || !res.feasible) {
-    logicals.forEach(l => {
-      const fid = l.rep.facilityId, b = _ceilDemand(l.demand);
-      sink.emit(fid, [{ logical: l, active: l.demand }], b);
-    });
-    sink.warnings.push('packMultiFormula: MILP infeasible — used singleton fallback');
-    return;
+    sink.warnings.push('packMultiFormula: MILP infeasible — used fast packer');
+    return false;
   }
 
   // Debug: set window._DEBUG_PACK=true in the console, then re-solve, to dump
@@ -1843,6 +1840,7 @@ function packMultiFormula(items, solveFn, sink) {
     if (u < 1e-9) return;
     sink.emit(v.facilityId, v.logicals.map((l, k) => ({ logical: l, active: v.rateDirection[k] * u })), bc);
   });
+  return true;
 }
 
 // Fast deterministic multi-formula packer.
@@ -2179,8 +2177,14 @@ function packBins(recipeFacilityCounts, graph, solveFn = solveLP, lite = false) 
       });
     }
   });
+  // Multi-formula packing: exact MILP once the sliders settle, greedy while
+  // dragging. Both produce the same item rates — the recipe demands are already
+  // fixed by Phase 2 — so a drag stays live and exact on the numbers that
+  // matter, and only the building/power split is refined on settle.
   if (multiFormula.length) {
-    packMultiFormulaFast(multiFormula, sink);
+    const exact = !lite && isHighsReady();
+    if (!exact || !packMultiFormula(multiFormula, solveFn, sink))
+      packMultiFormulaFast(multiFormula, sink);
   }
 
   return { facilityBuildings, facilityLoad, facilitySegments, bins, recipeAlloc, warnings };
@@ -2393,9 +2397,22 @@ let _lastPlanAggregates = null; // shared resource/facility/power render model
 let _lastMetastorageImport = null; // winning settled/drag import and actual rate
 let _lastMetastorageItem = null;   // candidate reused on the drag fast path
 let _lastMetastorageMs = 0;
-// Legacy exact-packer tuning. The runtime path uses packMultiFormulaFast and
-// does not read these; retained only for manual comparison with packMultiFormula.
-let _packTimeLimit = 0;
+// Exact-packer tuning, read by packMultiFormula on the settled path.
+//
+// The MILP is the reference implementation's model (integer buildings, lex
+// buildings→power) and normally solves in milliseconds on plans this size. The
+// time limit is a guard against a pathological instance, not an expected cost:
+// it runs synchronously on the main thread, so a long solve would freeze the
+// UI. HiGHS returns its best integer incumbent when the limit trips, which for
+// a packing model is already good — the remaining time only proves optimality.
+// MEASURED (5 crucible recipes, 31 variants): HiGHS does NOT prove optimality
+// on this strict-equality model — it runs out the time limit and returns an
+// incumbent, at every gap setting from 0 to 0.02. The returned split therefore
+// depends on where branch-and-bound happened to be when the clock expired:
+// gap 0 → 10 Expanded + 5 Reactor, gap 1e-3 → 9 + 6, gap 0.1 (terminates at
+// 1.1 s) → 11 + 4. Matching the reference plan on the current configs is real
+// but not robust — see PACKER_PIPELINE.md "Known gap".
+let _packTimeLimit = 2;   // seconds
 let _packMipGap = 0;
 // True while a solve is an in-place slider drag; passed through aggregate
 // options for compatibility and diagnostics.
