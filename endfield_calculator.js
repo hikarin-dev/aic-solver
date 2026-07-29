@@ -106,6 +106,27 @@ const RAW_DEFAULT_CAPS = {
 const RAW_LIMIT_SCHEMA_VERSION = 2;
 const XIGAGEN_VENT_ID = 'resource_xiranite_gas_vent';
 
+// Recipe-pin schema. Before v1, a production entry's `recipeId` stored the
+// *resolved* recipe — `addProductionItem` wrote `recipesByOutput[id][0]` even
+// though the user had picked nothing — and "is this a pin?" was inferred by
+// comparing that string against the current default. When new recipe data
+// inserted a different first producer (the 1.4 gas chain moved the default
+// producer of 24 items, Xiranite among them), every stored default silently
+// became an explicit pin: builds got locked to the pre-gas recipe, and the
+// bad pin propagated into shared URLs and the shipped default config.
+//
+// From v1 on, `recipeId` means strictly "user pinned this recipe" and is empty
+// otherwise (`recipeFor` already falls back to the first producer). Legacy
+// states carry no version marker and cannot be told apart from real pins, so
+// their pins are dropped — no UI could produce one, hence every pin in a
+// legacy state is an artifact of this bug.
+const RECIPE_PIN_SCHEMA_VERSION = 1;
+
+function migrateRecipePins(entries, schemaVersion) {
+  if (Number(schemaVersion || 0) >= RECIPE_PIN_SCHEMA_VERSION) return entries;
+  return (Array.isArray(entries) ? entries : []).map(p => ({ ...p, recipeId: '' }));
+}
+
 // Canonical display order for raw resources — used by the side nav list, the
 // main-page usage bars, and the add-raw picker. Ores, then liquids, then gases.
 // Anything not listed sorts last (alphabetically, as a fallback tiebreaker).
@@ -160,7 +181,8 @@ function _doSave() {
       production, rawLimits, facilityLimits, powerBatteries,
       prices, autoSolve, prioritizeUnsellable: prioritizeUnsellableOn(), outpostCost,
       autoMetaTransfer, roundUpFacilities,
-      rawLimitSchemaVersion: RAW_LIMIT_SCHEMA_VERSION
+      rawLimitSchemaVersion: RAW_LIMIT_SCHEMA_VERSION,
+      recipePinSchemaVersion: RECIPE_PIN_SCHEMA_VERSION
     }));
     encodeStateToUrl();
   } catch (e) {}
@@ -169,10 +191,12 @@ function _doSave() {
 /* ═══════════════════════════════════════════════
    URL STATE
    Side-pane config is encoded as readable hash params:
-     #t=item:rate,item:rate!&rl=mat:cap&ru=2&fl=fac:cap[:i]&b=mat:rate&as=0&oc=59688
+     #t=item:rate,item:rate!&pv=1&rl=mat:cap&ru=2&fl=fac:cap[:i]&b=mat:rate&as=0&oc=59688
    Append ! to a production entry to mark it locked.
    Append :recipe_id to a production entry to override the default recipe.
    Append :i to a facility entry to mark it integer-only (MIP solve).
+   pv is the recipe-pin schema version; a link without it predates the fix for
+   phantom pins, so its :recipe_id segments are dropped on decode.
    Prices live in localStorage only (separate Prices tab).
 ═══════════════════════════════════════════════ */
 let _pendingUrlPrices = null; // localStorage prices deferred past loadPrices()
@@ -281,6 +305,8 @@ function encodeStateToUrl() {
       }).join(','));
     }
 
+    if (production.length) parts.push('pv=' + RECIPE_PIN_SCHEMA_VERSION);
+
     if (rawLimits.length) {
       parts.push('rl=' + rawLimits.map(r => {
         const key = itemIdxById.get(r.matId)?.toString(36) ?? r.matId;
@@ -334,14 +360,17 @@ function decodeStateFromUrl(hash = location.hash) {
     }
 
     if (map.t) {
-      production = map.t.split(',').filter(Boolean).map(seg => {
+      const decodedProduction = map.t.split(',').filter(Boolean).map(seg => {
         const locked = seg.endsWith('!');
         if (locked) seg = seg.slice(0, -1);
         const f = seg.split(':');                          // [id_or_idx, rate, recipe_id?]
         const id = resolveItemId(f[0]), rate = parseFloat(f[1]) || 0;
-        const recipeId = f[2] || recipesByOutput[id]?.[0]?.id || '';
-        return { id, recipeId, rate, locked, optimized: false };
+        // Empty means "no pin" — recipeFor() falls back to the first producer.
+        // Never materialise the default here, or it re-becomes a phantom pin
+        // the next time the recipe data changes which producer comes first.
+        return { id, recipeId: f[2] || '', rate, locked, optimized: false };
       }).filter(p => itemById[p.id]);
+      production = migrateRecipePins(decodedProduction, map.pv);
     }
 
     if (map.rl) {
@@ -399,7 +428,8 @@ const APP_VERSION  = '1.4';
    user whose stored version differs (replacing their saved build). */
 
 function _applyStateSnapshot(s) {
-  if (Array.isArray(s.production)) production = s.production;
+  if (Array.isArray(s.production))
+    production = migrateRecipePins(s.production, s.recipePinSchemaVersion);
   if (Array.isArray(s.rawLimits))
     rawLimits = migrateRawLimits(s.rawLimits, s.rawLimitSchemaVersion);
   if (Array.isArray(s.facilityLimits)) facilityLimits = s.facilityLimits;
@@ -782,7 +812,9 @@ function addProductionItem(id) {
   if (production.find(p => p.id === id)) return;
   const recipes = recipesByOutput[id] || [];
   if (!recipes.length) return;
-  const p = { id, recipeId: recipes[0].id, rate: 0, locked: false, optimized: false };
+  // No recipeId: the item is unpinned, so the solver is free to spend a shared
+  // facility cap (e.g. Forge of the Sky) on whichever producer is cheaper.
+  const p = { id, recipeId: '', rate: 0, locked: false, optimized: false };
   production.push(p);   // push first so prodEntry(id) works inside solveMaxForItem
   invalidateMaxCache();
   recomputeMax(p);
