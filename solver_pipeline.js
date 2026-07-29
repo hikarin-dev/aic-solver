@@ -1630,6 +1630,8 @@ function _variantPortsAndSlots(recipes, rateDirection) {
 //
 // Slot usage is monotone in subset size → prune on it; port feasibility is NOT
 // monotone, so check it per-subset but keep extending regardless.
+const REGIME_ITEM_LIMIT = 10; // ≤1024 regimes per shape
+
 function enumerateVariants(recipes, facility, demandOf) {
   const variants = [];
   const n = recipes.length;
@@ -1658,19 +1660,37 @@ function enumerateVariants(recipes, facility, demandOf) {
           variants.push({ recipes: next.slice(), rateDirection: dir });
       };
 
-      // Two directions per subset (keeping the MILP small enough to re-solve
-      // every slider frame — the full 2^b regime sweep blew up to thousands of
-      // integer vars and multi-second solves):
-      //   1. Demand-aligned — runs the subset at the LP's demand ratio; the
-      //      single building that covers the subset's exact demand.
-      //   2. Fully-balanced — net every internal hand-off (densest ports), a
-      //      fallback when the demand-aligned direction overruns an output port.
+      // Demand-aligned — runs the subset at the LP's demand ratio, so a single
+      // building can cover the subset's exact demand.
       if (demandOf) {
         const dem = next.map(r => demandOf(r));
         const maxD = Math.max(...dem);
         if (maxD > 1e-12) addDir(dem.map(d => d / maxD));
       }
-      addDir(_computeRateDirection(next, _classifyInternal(next)));
+
+      // Full borderline-regime sweep, matching the reference packer: one
+      // variant per subset of "produced AND consumed inside the shape" items
+      // forced to net zero. Items left out of the subset stay external and pay
+      // a port instead. Netting everything is only one of 2^b regimes, and it
+      // is not always the port-cheapest — enumerating the rest is what lets a
+      // 5-slot Reactor host shapes the fully-netted direction cannot, i.e. the
+      // difference between a 13+2 and a 10+5 Expanded/Reactor crucible split.
+      //
+      // This sweep was previously cut to the fully-netted direction alone
+      // because the MILP re-solved on every slider frame. It now runs only on
+      // the settled solve (drags use packMultiFormulaFast), so the cost is
+      // affordable. REGIME_ITEM_LIMIT still caps the blow-up on any future
+      // shape with many borderline items.
+      const borderline = [..._classifyInternal(next)];
+      if (borderline.length <= REGIME_ITEM_LIMIT) {
+        for (let mask = (1 << borderline.length) - 1; mask >= 0; mask--) {
+          const internal = new Set();
+          borderline.forEach((it, bi) => { if (mask & (1 << bi)) internal.add(it); });
+          addDir(_computeRateDirection(next, internal));
+        }
+      } else {
+        addDir(_computeRateDirection(next, new Set(borderline)));
+      }
       rec(i + 1, next);
     }
   })(0, []);

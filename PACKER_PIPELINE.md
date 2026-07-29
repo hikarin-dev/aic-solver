@@ -17,10 +17,64 @@ inputs, outputs, and crafting time are facility twins. Phase 1 keeps one LP
 variable per logical twin, while the packer can assign its demand to either
 physical host.
 
+## Two packers: exact on settle, bounded during drag
+
+`packBins` picks by the `lite` flag (`lite === _solverDragging`):
+
+- **Settled solve — `packMultiFormula`.** The exact variant MILP: integer
+  building counts `x_v` per variant, continuous scale `u_v`, strict-equality
+  demand, minimising buildings with power as a tiebreak. Solved through HiGHS on
+  the main thread, bounded by `_packTimeLimit` (2 s). This matches the reference
+  implementation, which also runs an integer packing MIP rather than a heuristic.
+
+  `enumerateVariants` performs the **full borderline-regime sweep**: for each
+  shape it emits one variant per subset of the items that are both produced and
+  consumed inside that shape, forcing those to net zero and leaving the rest
+  external on a port (plus the demand-aligned direction). Netting *everything*
+  is only one of `2^b` regimes and is not always port-cheapest — enumerating the
+  rest is what lets a 5-slot Reactor host shapes the fully-netted direction
+  cannot. Capped by `REGIME_ITEM_LIMIT` (10). This sweep is only affordable
+  because the MILP no longer runs per slider frame.
+- **Slider drag — `packMultiFormulaFast`.** The bounded greedy path below.
+- **Fallback.** If the MILP is infeasible or HiGHS is not loaded, `packBins`
+  falls back to the fast packer (never to singleton bins, which are worse).
+
+Both packers receive the *same* per-recipe demands from Phase 2, so they produce
+**identical item rates** — only the building/power split differs. That is what
+makes the drag/settle split safe: production numbers are exact and live while
+dragging, and only the physical layout is refined once the slider settles.
+Measured on the reference plan: fast 2.5 ms, exact ~750 ms, item rates
+byte-identical. With the regime sweep the exact path reproduces the reference
+implementation's plan on both comparison configs — 246 buildings / 4885 kW
+(10 Expanded + 5 Reactor) and 240 buildings / 4795 kW.
+
+### Known gap: the exact pack is a time-limited incumbent, not a proven optimum
+
+Measured on the 5-recipe / 31-variant crucible pool, HiGHS never proves
+optimality on the strict-equality model — it exhausts `_packTimeLimit` and
+returns an incumbent at every `mip_rel_gap` from 0 to 0.02. Which split comes
+back depends on where branch-and-bound stood when the clock expired:
+
+| `mip_rel_gap` | wall time | result |
+| ------------- | --------- | ------ |
+| 0 / 1e-6      | 2.0 s (limit) | 10 Expanded + 5 Reactor |
+| 1e-3 / 0.02   | 2.0 s (limit) | 9 + 6 |
+| 0.1           | 1.1 s (gap)   | 11 + 4 |
+
+Note 9 + 6 scores *better* under our weighted objective (15.12 vs 15.125) yet
+the reference implementation reports 10 + 5. Two candidate causes, both
+unverified: `portsFit` deliberately does not cap `pipeIn` where the reference
+asserts every port cap, so our enumeration may admit variants theirs rejects;
+and the reference solves strict lex passes (buildings → power → compactness) to
+optimality within a 30 s budget rather than one weighted objective under 2 s.
+
+Until that is settled, treat the crucible split as approximate. Building counts
+and item rates are unaffected — only which crucible model hosts the work.
+
 ## Bounded deterministic packer
 
-The runtime packer is `packMultiFormulaFast`. It does not invoke HiGHS and does
-not enumerate every recipe subset.
+`packMultiFormulaFast` does not invoke HiGHS and does not enumerate every recipe
+subset.
 
 1. Collapse active twins by the facility-independent recipe signature.
 2. Generate demand-aligned, balanced, and equal-layer candidates for compatible
