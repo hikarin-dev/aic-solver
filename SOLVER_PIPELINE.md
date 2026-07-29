@@ -361,12 +361,26 @@ recipe mix and therefore identical bins. Outputs are pinned, so displayed rates
 don't move. (If two inputs genuinely produce *different* outputs — e.g. a free
 target maximises higher than the pinned value — the bins still differ, correctly.)
 
-This second pass is **skipped during an in-place slider drag** (`inPlace`). The
-main gas-placement MIP is also relaxed during the drag preview; determinism and
-whole physical placement only need to hold once the slider settles. The
-settle solve (debounced `SETTLE_DELAY` after the drag ends, cancelled by an
-immediate re-grab) runs the exact model, so the final
-bins are canonical.
+This second pass is **skipped during an in-place slider drag** (`inPlace`) —
+only the recipe *mix* is non-canonical there, not the rates. The settle solve
+(debounced `SETTLE_DELAY` after the drag ends, cancelled by an immediate
+re-grab) runs it, so the final bins are canonical.
+
+The gas-placement MIP is **not** relaxed during a drag. It used to be, and that
+was not a cosmetic approximation: fractional transmuter placements mean a
+fractional catalyst bill, so the free targets settle on a different optimum and
+their sliders visibly snapped on pointer-up (on the reference plan, Heavy
+Xiranite 24.842 → 24.000 and Xiranite 0.000 → 15.520). Keeping the integrality
+costs worker time, not responsiveness:
+
+| | worker solve | main-thread |
+| --- | --- | --- |
+| relaxed LP (old) | ~5 ms | ~8 ms |
+| exact MIP (now)  | 130–195 ms | ~8 ms |
+
+The solve is on `solver_worker.js`, so the main thread is untouched and the
+dragged slider stays pointer-smooth. The other targets refresh at roughly
+5–7 Hz with true values instead of 60 Hz with wrong ones.
 
 ---
 
@@ -395,8 +409,9 @@ in the timing log).
 The solver log prints a per-phase breakdown so the costly step is obvious at a
 glance: `graph` (build) · `single` (max-rate map; skipped on drag) · `lp` (main
 solve) · `canon` (Phase 3b; skipped on drag) · `pack` (bounded Phase-3 packer)
-· `render` (DOM). During a drag the main solve is a continuous preview and the
-packer still runs live, normally in well under 1 ms.
+· `render` (DOM). During a drag the main solve is the same exact MIP as the
+settled pass (only `single`, `canon` and the exact packer are skipped), so `lp`
+dominates the frame; the greedy packer still runs live in well under 1 ms.
 
 ---
 

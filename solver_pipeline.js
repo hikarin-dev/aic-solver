@@ -2970,12 +2970,20 @@ async function runSolver(inPlace = false, pinAll = false) {
   let metaCandidatesEvaluated = 0;
   const mainObjective = pinAll ? 'facc' : 'profit';
   const mainOpType = pinAll ? 'min' : 'max';
-  // Whole gas-placement variables make this a MIP and are the dominant cost
-  // on the expanded 1.4 graph. During an active drag use the LP relaxation;
-  // pointer-up always schedules a settled exact-MIP pass 320 ms later. This is
-  // only a live preview optimisation: persisted counts, power and sustain
-  // usage still come from the exact model.
-  const solveGenerals = inPlace ? [] : generals;
+  // Gas placements stay integer during a drag. They used to be relaxed for the
+  // live preview, but the relaxation is not a cosmetic approximation: fractional
+  // transmuter placements mean a fractional catalyst bill, which is a different
+  // problem, and the free targets settle on a different optimum. On the
+  // reference plan a drag showed Heavy Xiranite 24.842 and Xiranite 0.000 where
+  // the settled answer is 24.000 and 15.520 — the other sliders visibly snapped
+  // on pointer-up.
+  //
+  // Re-measured, the integrality is affordable: the worker solves the exact MIP
+  // in ~48 ms against ~5 ms relaxed. The settled solve's several-hundred-ms
+  // `solvePhase` is the Metastorage candidate scan, not this. The drag is
+  // latest-only scheduled, so ~40 ms extra per frame costs frames, not
+  // correctness, and every number on screen is now the real one.
+  const solveGenerals = generals;
   const solveMain = (relaxed = false) => solveLPAsync({
     optimize: mainObjective,
     opType: mainOpType,
