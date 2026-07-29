@@ -1749,6 +1749,18 @@ function _buildTwinPools() {
   return map;
 }
 
+// The packing MILP as handed to HiGHS. Shared by the synchronous path and the
+// off-thread path so both solve exactly the same model.
+function _packModel(constraints, variables, generals) {
+  const options = {};
+  if (_packMipGap > 0) options.mip_rel_gap = _packMipGap;
+  if (_packTimeLimit > 0) options.time_limit = _packTimeLimit;
+  return {
+    optimize: 'obj', opType: 'min', constraints, variables, generals,
+    options: Object.keys(options).length ? options : undefined,
+  };
+}
+
 // packMultiFormula: twin-aware MILP over ALL multi-formula active recipes.
 //
 // Recipes are first collapsed into "logical recipes" by I/O signature, summing
@@ -1803,7 +1815,8 @@ function packMultiFormula(items, solveFn, sink) {
     if (!hasSingleton) variants.push({ facilityId: l.rep.facilityId, power: facilityTypeById[l.rep.facilityId]?.power ?? 0, logicals: [l], rateDirection: [1] });
   });
 
-  // 3. Build the MILP.  Objective is a single weighted "obj" = buildings +
+  // 3. Build the MILP.  See _packModel for the solver options.  Objective is a
+  //    single weighted "obj" = buildings +
   //    ε·power per building: integer building counts dominate (ε·max_power ≪ 1),
   //    power only breaks ties — same result as a lex buildings→power pass but in
   //    ONE solve instead of two (matters on every slider frame).
@@ -1824,12 +1837,10 @@ function packMultiFormula(items, solveFn, sink) {
   // 4. Solve: minimise buildings (power as tiebreak).  Under a time limit HiGHS
   //    returns its best integer incumbent, which for a packing model is found
   //    quickly — the remaining time would only prove optimality.
+  const model = _packModel(constraints, variables, generals);
   let res = null;
   try {
-    const options = {};
-    if (_packMipGap > 0) options.mip_rel_gap = _packMipGap;
-    if (_packTimeLimit > 0) options.time_limit = _packTimeLimit;
-    res = solveFn({ optimize: 'obj', opType: 'min', constraints, variables, generals, options: Object.keys(options).length ? options : undefined });
+    res = solveFn(model);
   } catch (e) { sink.warnings.push(`packMultiFormula: solver error: ${e}`); }
 
   // 5. Bail without emitting so the caller can fall back to the fast packer,
@@ -2110,7 +2121,7 @@ function packMultiFormulaFast(items, sink) {
 //   bins              : [{ facilityId, recipeIds[], buildingCount, active: Map }]
 //   recipeAlloc       : Map<recipeId, binIndex[]>
 //   warnings          : string[]
-function packBins(recipeFacilityCounts, graph, solveFn = solveLP, lite = false) {
+function packBins(recipeFacilityCounts, graph, solveFn = solveLP, lite = false, exactResult = null) {
   const facilityBuildings = new Map();
   const facilityLoad = new Map();
   const facilitySegments = new Map();
@@ -2208,13 +2219,42 @@ function packBins(recipeFacilityCounts, graph, solveFn = solveLP, lite = false) 
   // dragging. Both produce the same item rates — the recipe demands are already
   // fixed by Phase 2 — so a drag stays live and exact on the numbers that
   // matter, and only the building/power split is refined on settle.
+  //
+  // `exactResult` lets the caller supply an already-solved MILP result (from
+  // refineExactPackAsync, solved on the worker) so this call only emits bins and
+  // never blocks. Without it, `lite` picks greedy vs. a synchronous exact solve.
   if (multiFormula.length) {
-    const exact = !lite && isHighsReady();
-    if (!exact || !packMultiFormula(multiFormula, solveFn, sink))
-      packMultiFormulaFast(multiFormula, sink);
+    const emitted = exactResult
+      ? packMultiFormula(multiFormula, () => exactResult, sink)
+      : (!lite && isHighsReady() && packMultiFormula(multiFormula, solveFn, sink));
+    if (!emitted) packMultiFormulaFast(multiFormula, sink);
   }
 
-  return { facilityBuildings, facilityLoad, facilitySegments, bins, recipeAlloc, warnings };
+  return {
+    facilityBuildings, facilityLoad, facilitySegments, bins, recipeAlloc, warnings,
+    multiFormula,
+  };
+}
+
+// The packing MILP for an already-collected multi-formula recipe list, without
+// solving it. Built by running the normal path with a capturing "solver" — the
+// enumeration is under a millisecond, so rebuilding it is cheaper than
+// restructuring packMultiFormula around a resumable model.
+function packMultiFormulaModel(items) {
+  if (!items?.length) return null;
+  let captured = null;
+  packMultiFormula(items, model => { captured = model; return null; }, { warnings: [], emit() {} });
+  return captured;
+}
+
+// Solve the exact packing MILP on the worker and return a full packBins result.
+// Nothing here touches the main thread except the (sub-millisecond) emit.
+async function refineExactPackAsync(recipeFacilityCounts, graph, multiFormula) {
+  const model = packMultiFormulaModel(multiFormula);
+  if (!model) return null;
+  const res = await solveLPAsync(model);
+  if (!res?.feasible) return null;
+  return packBins(recipeFacilityCounts, graph, solveLP, false, res);
 }
 
 
@@ -2298,12 +2338,30 @@ function buildPlanAggregates(
   if (scaledCounts.size) {
     const started = performance.now();
     try {
-      packed = packBins(scaledCounts, graph, solveLP, lite);
+      // Never solve the packing MILP inline — it costs over a second on a
+      // settled plan and would freeze the UI on pointer-up. Render the greedy
+      // pack immediately (same item rates, only the building/power split
+      // differs), and use the exact result once refineExactPackAsync has landed
+      // it on the worker. _exactPackCache is keyed on the demands it was solved
+      // for, so a stale drag frame can never show another plan's bins.
+      const key = _exactPackKey(scaledCounts);
+      _lastPackScaledCounts = scaledCounts;
+      packed = (!lite && _exactPackCache && _exactPackCache.key === key)
+        ? _exactPackCache.packed
+        : packBins(scaledCounts, graph, solveLP, true);
+      _lastPackKey = key;
+      // A plan with no multi-formula recipes has nothing to refine — the greedy
+      // result is already exact, so don't schedule a pointless worker round-trip.
+      _lastPackExact = packed === _exactPackCache?.packed
+        || !packed.multiFormula?.length;
     } finally {
       _lastPackMs = performance.now() - started;
     }
   } else {
     _lastPackMs = 0;
+    _lastPackScaledCounts = null;
+    _lastPackKey = null;
+    _lastPackExact = true;
   }
 
   const facilityLoad = new Map(packed.facilityLoad);
@@ -2442,6 +2500,20 @@ let _lastMetastorageMs = 0;
 // worse early incumbent (1e-3 returns 11 Expanded + 4 Reactor instead of 10+5).
 let _packTimeLimit = 2;   // seconds
 let _packMipGap = 0;
+
+// Exact-pack handoff. buildPlanAggregates renders the greedy pack synchronously
+// and publishes the demands it packed; runSolver then solves the exact MILP on
+// the worker and stores it here, keyed by those demands, before re-rendering.
+let _lastPackScaledCounts = null;
+let _lastPackKey = null;
+let _lastPackExact = true;
+let _exactPackCache = null;   // { key, packed }
+
+function _exactPackKey(scaledCounts) {
+  const parts = [];
+  scaledCounts.forEach((v, rid) => parts.push(rid + ':' + v.toFixed(6)));
+  return parts.sort().join('|');
+}
 // True while a solve is an in-place slider drag; passed through aggregate
 // options for compatibility and diagnostics.
 let _solverDragging = false;
@@ -3301,6 +3373,25 @@ async function runSolver(inPlace = false, pinAll = false) {
   };
   _solverPerformanceSamples.push(perfSample);
   if (_solverPerformanceSamples.length > 60) _solverPerformanceSamples.shift();
+
+  // Settled solve: the render above used the greedy pack so pointer-up is
+  // instant. Refine it to the exact MILP on the worker and re-render only the
+  // building/power views — item rates are already final and do not move.
+  // Guarded by solveGeneration, so re-grabbing the slider mid-refine discards
+  // the result instead of repainting over the newer drag.
+  if (!inPlace && !_lastPackExact && _lastPackScaledCounts?.size) {
+    const refineKey = _lastPackKey;
+    const refineCounts = _lastPackScaledCounts;
+    const refineMulti = _lastPlanAggregates?.packed?.multiFormula;
+    if (refineMulti?.length) {
+      refineExactPackAsync(refineCounts, graph, refineMulti).then(exact => {
+        if (!exact || solveGeneration !== _solverRunGeneration) return;
+        _exactPackCache = { key: refineKey, packed: exact };
+        computeSummary();
+        logS(`Exact pack refined off-thread (pack=${_lastPackMs.toFixed(1)}ms)`, 'ok');
+      }).catch(() => {});
+    }
+  }
   // Phase breakdown: graph build, singleMax (skipped on drag), main LP solve,
   // canonicalise (skipped on drag), Phase-3 packer (inside render), DOM render.
   logS(`Done. graph=${(_t1-_t0).toFixed(1)} single=${(_t2-_t1).toFixed(1)} lp=${(_tSolve-_t2).toFixed(1)} meta=${_lastMetastorageMs.toFixed(1)} canon=${(_t3-_tSolve).toFixed(1)} pack=${_lastPackMs.toFixed(1)} summary=${perfSample.summaryMs.toFixed(1)} usage=${perfSample.usageMs.toFixed(1)} render=${(_t4-_t3-_lastPackMs).toFixed(1)} (ms) · lag=${_lag}ms`, 'ok');

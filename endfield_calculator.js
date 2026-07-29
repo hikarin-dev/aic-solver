@@ -971,10 +971,11 @@ function renderProducts() {
     const endDrag = () => {
       if (!_dragging) return;
       _dragging = false;
-      // Keep pointerup cheap: no synchronous re-render here.  The in-place slider
-      // values are already current, and the deferred settle (if not cancelled by
-      // an immediate re-grab) re-renders the list when it runs.
-      scheduleSettle();
+      // Settle immediately on release — waiting SETTLE_DELAY made letting go feel
+      // laggy. A re-grab during the settle cancels it: pointerdown clears the
+      // timers and flips _dragging, and runSolver's generation counter aborts any
+      // in-flight worker round-trip whose result is no longer wanted.
+      settleNow();
     };
     slider.addEventListener('pointerup', endDrag);
     slider.addEventListener('pointercancel', endDrag);
