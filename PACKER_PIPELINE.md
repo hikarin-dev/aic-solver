@@ -48,28 +48,35 @@ byte-identical. With the regime sweep the exact path reproduces the reference
 implementation's plan on both comparison configs — 246 buildings / 4885 kW
 (10 Expanded + 5 Reactor) and 240 buildings / 4795 kW.
 
-### Known gap: the exact pack is a time-limited incumbent, not a proven optimum
+### Port caps
 
-Measured on the 5-recipe / 31-variant crucible pool, HiGHS never proves
-optimality on the strict-equality model — it exhausts `_packTimeLimit` and
-returns an incumbent at every `mip_rel_gap` from 0 to 0.02. Which split comes
-back depends on where branch-and-bound stood when the clock expired:
+The cap set matches the reference exactly, and getting it wrong is not
+cosmetic:
 
-| `mip_rel_gap` | wall time | result |
-| ------------- | --------- | ------ |
-| 0 / 1e-6      | 2.0 s (limit) | 10 Expanded + 5 Reactor |
-| 1e-3 / 0.02   | 2.0 s (limit) | 9 + 6 |
-| 0.1           | 1.1 s (gap)   | 11 + 4 |
+| port | capped? |
+| ---- | ------- |
+| pipe-in (distinct liquids) | **yes**, `pipeInPorts` |
+| pipe-out | yes, `pipeOutPorts` |
+| belt-out | yes, `beltOutPorts` |
+| belt-in (distinct solids) | **no** — many belts feed the shared cache |
+| inner slots | yes, `cacheSlots` |
 
-Note 9 + 6 scores *better* under our weighted objective (15.12 vs 15.125) yet
-the reference implementation reports 10 + 5. Two candidate causes, both
-unverified: `portsFit` deliberately does not cap `pipeIn` where the reference
-asserts every port cap, so our enumeration may admit variants theirs rejects;
-and the reference solves strict lex passes (buildings → power → compactness) to
-optimality within a 30 s budget rather than one weighted objective under 2 s.
+This was previously inverted: belt-in was capped and pipe-in ran free. The
+crucible recipes are liquid-heavy, so the missing pipe-in cap admitted variants
+that cannot physically exist. The MILP used them to reach a 9 Expanded + 6
+Reactor split which scores better under our objective (15.12 vs 15.125) than the
+reference's 10 + 5 — it was simply not buildable.
 
-Until that is settled, treat the crucible split as approximate. Building counts
-and item rates are unaffected — only which crucible model hosts the work.
+Fixing the caps also made the model tractable. Before, HiGHS could not prove
+optimality and exhausted `_packTimeLimit` at every `mip_rel_gap` from 0 to 0.02,
+returning whichever incumbent it happened to hold. With the correct caps the
+exact solve **terminates** in ~0.9 s and returns the reference plan. The single
+weighted objective (buildings + 1e-4·power per building) therefore reproduces
+the reference's lex buildings → power result on every config tested; the third
+lex pass (compactness) is a cosmetic tiebreak we do not need.
+
+Keep `_packMipGap` at 0. A non-zero gap accepts an early incumbent — 1e-3
+returns 11 + 4 — and buys nothing now that the solve terminates.
 
 ## Bounded deterministic packer
 

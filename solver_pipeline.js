@@ -1624,9 +1624,15 @@ function _variantPortsAndSlots(recipes, rateDirection) {
 //     consumed inside the subset) to net to zero; the rest stay external,
 //     handled by net-flow ports.  These give the densest co-locations.
 //
-// Crucibles do not cap how many distinct fluids are piped IN (multiple input
-// pipes feed the shared cache), so `portsFit` checks only the OUTPUT ports
-// (pipe-out/belt-out) and solid belt-in — NOT pipe-in.
+// Port caps follow the reference packer exactly: distinct liquids piped IN are
+// capped by pipeInPorts, outputs by pipeOutPorts/beltOutPorts, and solid
+// belt-in variety is NOT capped (many belts can feed the shared cache).
+//
+// This is inverted from what the code did before — it capped belt-in and let
+// pipe-in run free. The crucible recipes are liquid-heavy, so an uncapped
+// pipe-in admitted variants that cannot physically exist, which is how the MILP
+// reached a 9 Expanded + 6 Reactor split that scores better under our objective
+// than the reference's 10 + 5 yet is not buildable.
 //
 // Slot usage is monotone in subset size → prune on it; port feasibility is NOT
 // monotone, so check it per-subset but keep extending regardless.
@@ -1637,7 +1643,7 @@ function enumerateVariants(recipes, facility, demandOf) {
   const n = recipes.length;
   const slotCap = facility.cacheSlots ?? 1;
   const portsFit = ps =>
-    ps.beltIn  <= (facility.beltInPorts  ?? Infinity) &&
+    ps.pipeIn  <= (facility.pipeInPorts  ?? Infinity) &&
     ps.beltOut <= (facility.beltOutPorts ?? Infinity) &&
     ps.pipeOut <= (facility.pipeOutPorts ?? Infinity);
   (function rec(start, current) {
@@ -1897,8 +1903,9 @@ function _fastPackingOption(logicals, actives) {
     const recipes = logicals.map(logical =>
       recipeById[logical.hosts.get(facilityId)] || logical.rep);
     const ports = _variantPortsAndSlots(recipes, rateDirection);
+    // Same cap set as enumerateVariants: pipe-in capped, belt-in uncapped.
     const fits = ports.slots <= (facility.cacheSlots ?? 1)
-      && ports.beltIn <= (facility.beltInPorts ?? Infinity)
+      && ports.pipeIn <= (facility.pipeInPorts ?? Infinity)
       && ports.beltOut <= (facility.beltOutPorts ?? Infinity)
       && ports.pipeOut <= (facility.pipeOutPorts ?? Infinity);
     if (!fits) return;
@@ -2425,13 +2432,14 @@ let _lastMetastorageMs = 0;
 // it runs synchronously on the main thread, so a long solve would freeze the
 // UI. HiGHS returns its best integer incumbent when the limit trips, which for
 // a packing model is already good — the remaining time only proves optimality.
-// MEASURED (5 crucible recipes, 31 variants): HiGHS does NOT prove optimality
-// on this strict-equality model — it runs out the time limit and returns an
-// incumbent, at every gap setting from 0 to 0.02. The returned split therefore
-// depends on where branch-and-bound happened to be when the clock expired:
-// gap 0 → 10 Expanded + 5 Reactor, gap 1e-3 → 9 + 6, gap 0.1 (terminates at
-// 1.1 s) → 11 + 4. Matching the reference plan on the current configs is real
-// but not robust — see PACKER_PIPELINE.md "Known gap".
+// With the port caps matching the reference (pipe-in capped, belt-in not) the
+// MILP terminates with a proven optimum in ~0.9 s on the reference plan, so the
+// time limit is a guard against a pathological instance rather than an expected
+// cost — it runs synchronously on the main thread, where a long solve would
+// freeze the UI. HiGHS returns its best incumbent if the limit ever trips.
+//
+// Keep the gap at 0: it terminates anyway, and a non-zero gap only accepts a
+// worse early incumbent (1e-3 returns 11 Expanded + 4 Reactor instead of 10+5).
 let _packTimeLimit = 2;   // seconds
 let _packMipGap = 0;
 // True while a solve is an in-place slider drag; passed through aggregate
