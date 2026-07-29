@@ -640,9 +640,7 @@ function _addSourceFacilityCaps(constraints, variables, recipeList, placementVar
         });
         const drain = sustainDrainForRecipe(recipe);
         if (drain?.itemId !== itemId) return;
-        const placementName = placementVarByIndex.get(ri);
-        const variableName = placementName || `x_${ri}`;
-        variables[variableName][cName] = (variables[variableName][cName] || 0)
+        variables[`x_${ri}`][cName] = (variables[`x_${ri}`][cName] || 0)
           + drain.ratePerMinute / cfg.ratePerMinute;
       });
     });
@@ -652,14 +650,22 @@ function _addSourceFacilityCaps(constraints, variables, recipeList, placementVar
 // Add the 1.4 gas mechanics to an already-created recipe LP.
 //
 // For every transmuter or gas-environment recipe, p_ri is an integer placed-
-// building variable with x_ri <= p_ri. Catalyst balance is charged to p_ri,
-// giving exactly 6/min * ceil(recipe load). Environment rows use those same
-// placements and a whole-number vaporizer variable:
+// building variable with x_ri <= p_ri. It is what facility caps, power and the
+// vaporizer coverage row count, because those follow whole buildings.
+//
+// Catalyst balance is charged to x_ri, not p_ri. A placed transmuter does drain
+// its catalyst continuously, but in-game the drain can be pulse-width modulated
+// or batched down to exactly the amount a partially-loaded unit needs, so the
+// sustained cost tracks fractional recipe load rather than ceil(load). Charging
+// p_ri instead billed a 4.87-load bank of transmuters for 5 whole units of
+// catalyst and understated every downstream rate.
+//
+// Environment rows still use placements and a whole-number vaporizer variable:
 //
 //   machinesPerVaporizer * x_vaporize - sum(p_env_recipe) >= 0
 //
 // Returns recipe-index -> placement-variable so facility caps, objectives and
-// post-solve flow accounting all use the identical physical count.
+// post-solve building counts all use the identical physical count.
 function _addGasSustainConstraints(constraints, variables, generals, recipeList) {
   const placementVarByIndex = new Map();
   const ensurePlacement = ri => {
@@ -679,16 +685,17 @@ function _addGasSustainConstraints(constraints, variables, generals, recipeList)
     const drain = sustainDrainForRecipe(recipe);
     const gasEnv = gasEnvironmentForRecipe(recipe);
     if (!drain && !gasEnv) return;
-    const pName = ensurePlacement(ri);
+    ensurePlacement(ri);
     if (!drain) return;
 
+    const xName = `x_${ri}`;
     const balanceName = `bal_${drain.itemId}`;
     if (constraints[balanceName])
-      variables[pName][balanceName] = (variables[pName][balanceName] || 0) - drain.ratePerMinute;
+      variables[xName][balanceName] = (variables[xName][balanceName] || 0) - drain.ratePerMinute;
 
     const rawName = `raw_${drain.itemId}`;
     if (constraints[rawName])
-      variables[pName][rawName] = (variables[pName][rawName] || 0) + drain.ratePerMinute;
+      variables[xName][rawName] = (variables[xName][rawName] || 0) + drain.ratePerMinute;
   });
 
   const envRecipeIndices = new Map();
@@ -768,8 +775,7 @@ function buildItemMaxModel(targetId, graph) {
     variables[`x_${ri}`].obj = coefficient;
   });
   (drainTermsByItem.get(targetId) || []).forEach(([ri, rate]) => {
-    const pName = gasPlacementVars.get(ri);
-    if (pName) variables[pName].obj = (variables[pName].obj || 0) - rate;
+    variables[`x_${ri}`].obj = (variables[`x_${ri}`].obj || 0) - rate;
   });
 
   // The global LP's ub_net_X rows must remain valid when Auto Meta adds an
@@ -947,10 +953,10 @@ function isDisposalOnlyRecipe(r) {
   return inps.every(i => forcedDisposalSet.has(i.itemId));
 }
 
-// Ordinary recipe inputs plus the out-of-band catalyst that a placed
-// transmuter continuously drains. The synthetic dependency has amount 0 here;
-// its real 6/min coefficient belongs to the integer placement variable in the
-// LP, not to the fractional recipe-load variable.
+// Ordinary recipe inputs plus the out-of-band catalyst a transmuter drains.
+// The synthetic dependency has amount 0 here — it exists only so the graph
+// builder traverses the catalyst's supply chain. Its real 6/min coefficient is
+// attached to the recipe-load variable x_ri when the LP rows are built.
 function recipeDependencyInputs(recipe) {
   const inputs = recipe.inputs || [];
   const drain = sustainDrainForRecipe(recipe);
@@ -1364,10 +1370,8 @@ function computeNetRatesFromFlow(recipeFacilityCounts, graph, recipePlacementCou
     (r.outputs || []).forEach(o => { net[o.itemId] = (net[o.itemId] || 0) + calcRate(o.amount, r.craftingTime) * fc; });
     (r.inputs  || []).forEach(i => { net[i.itemId] = (net[i.itemId] || 0) - calcRate(i.amount, r.craftingTime) * fc; });
     const drain = sustainDrainForRecipe(r);
-    if (drain) {
-      const placed = recipePlacementCounts?.get(rid) ?? Math.ceil(fc - 1e-9);
-      net[drain.itemId] = (net[drain.itemId] || 0) - drain.ratePerMinute * placed;
-    }
+    if (drain)
+      net[drain.itemId] = (net[drain.itemId] || 0) - drain.ratePerMinute * fc;
   });
   return net;
 }
@@ -1386,11 +1390,12 @@ function rawAndFacilityUsage(recipeFacilityCounts, graph, recipePlacementCounts 
       if (forcedRawSet.has(i.itemId) || (graph.itemNodes.get(i.itemId) || {}).isRawMaterial)
         rawUse[i.itemId] = (rawUse[i.itemId] || 0) + calcRate(i.amount, r.craftingTime) * fc;
     });
+    // Catalyst is PWM-able down to the fractional load; buildings are not.
     const drain = sustainDrainForRecipe(r);
-    const placed = recipePlacementCounts?.get(rid) ?? (drain ? Math.ceil(fc - 1e-9) : fc);
     if (drain && (forcedRawSet.has(drain.itemId) || (graph.itemNodes.get(drain.itemId) || {}).isRawMaterial))
-      rawUse[drain.itemId] = (rawUse[drain.itemId] || 0) + drain.ratePerMinute * placed;
-    facUse[r.facilityId] = (facUse[r.facilityId] || 0) + placed;
+      rawUse[drain.itemId] = (rawUse[drain.itemId] || 0) + drain.ratePerMinute * fc;
+    facUse[r.facilityId] = (facUse[r.facilityId] || 0)
+      + (recipePlacementCounts?.get(rid) ?? (drain ? Math.ceil(fc - 1e-9) : fc));
   });
   const sources = window.RECIPES_DB?.rawMaterialSources || DEFAULT_RAW_MATERIAL_SOURCES;
   Object.entries(rawUse).forEach(([itemId, rate]) => {
@@ -2199,14 +2204,12 @@ function buildPlanAggregates(
       if (forcedRawSet.has(input.itemId) || node?.isRawMaterial) add(rawUse, input.itemId, rate);
     });
 
-    // Transmuter catalyst drain follows placements, not fractional activity.
+    // Transmuter catalyst drain follows fractional activity, not placements:
+    // a partially-loaded bank can be pulse-width modulated or batched down to
+    // exactly the catalyst its load needs.
     const drain = sustainDrainForRecipe(recipe);
     if (drain) {
-      const savedPlacement = recipePlacementCounts?.get(rid);
-      const placed = Math.abs(scale - 1) < 1e-9 && savedPlacement != null
-        ? savedPlacement
-        : Math.ceil(active - 1e-9);
-      const rate = drain.ratePerMinute * placed;
+      const rate = drain.ratePerMinute * active;
       add(consumed, drain.itemId, rate);
       const node = graph?.itemNodes.get(drain.itemId);
       if (forcedRawSet.has(drain.itemId) || node?.isRawMaterial) add(rawUse, drain.itemId, rate);
@@ -2441,7 +2444,7 @@ function _installMetastorageVariable(
   return { itemId, cost, budget, cycleSeconds: Number(cfg.cycleSeconds) || 3600 };
 }
 
-function _metastorageSolveMetrics(result, variables, recipeList, gasPlacementVars, meta) {
+function _metastorageSolveMetrics(result, variables, recipeList, meta) {
   let rawCost = 0;
   let buildings = 0;
   let power = 0;
@@ -2464,15 +2467,11 @@ function _metastorageSolveMetrics(result, variables, recipeList, gasPlacementVar
       rawCost += rate;
     });
     const drain = sustainDrainForRecipe(recipe);
-    if (drain) {
-      const placementName = gasPlacementVars.get(ri);
-      const placed = placementName ? Number(result?.[placementName]) || 0 : Math.ceil(active - 1e-9);
-      if (forcedRawSet.has(drain.itemId)) {
-        const rate = drain.ratePerMinute * placed;
-        addRaw(drain.itemId, rate);
-        if (drain.itemId !== 'item_liquid_water' && drain.itemId !== 'item_liquid_acid')
-          rawCost += rate;
-      }
+    if (drain && forcedRawSet.has(drain.itemId)) {
+      const rate = drain.ratePerMinute * active;
+      addRaw(drain.itemId, rate);
+      if (drain.itemId !== 'item_liquid_water' && drain.itemId !== 'item_liquid_acid')
+        rawCost += rate;
     }
   });
   const sources = window.RECIPES_DB?.rawMaterialSources || DEFAULT_RAW_MATERIAL_SOURCES;
@@ -2780,9 +2779,7 @@ async function runSolver(inPlace = false, pinAll = false) {
       variables[`x_${ri}`][cName] = coefficient;
     });
     (drainTermsByItem.get(iid) || []).forEach(([ri, rate]) => {
-      const pName = gasPlacementVars.get(ri);
-      if (!pName) return;
-      variables[pName][cName] = (variables[pName][cName] || 0) - rate;
+      variables[`x_${ri}`][cName] = (variables[`x_${ri}`][cName] || 0) - rate;
       hasCoef = true;
     });
     if (hasCoef) constraints[cName] = { max: mx };
@@ -2824,9 +2821,7 @@ async function runSolver(inPlace = false, pinAll = false) {
       variables[`x_${ri}`].value = (variables[`x_${ri}`].value || 0) + effectivePrice * coefficient;
     });
     (drainTermsByItem.get(iid) || []).forEach(([ri, rate]) => {
-      const pName = gasPlacementVars.get(ri);
-      if (pName)
-        variables[pName].value = (variables[pName].value || 0) - effectivePrice * rate;
+      variables[`x_${ri}`].value = (variables[`x_${ri}`].value || 0) - effectivePrice * rate;
     });
   });
 
@@ -2942,7 +2937,7 @@ async function runSolver(inPlace = false, pinAll = false) {
       if (solveGeneration !== _solverRunGeneration) return;
       const exactBaselineResult = result;
       const exactBaselineMetrics = result?.feasible
-        ? _metastorageSolveMetrics(result, variables, recipeList, gasPlacementVars, null)
+        ? _metastorageSolveMetrics(result, variables, recipeList, null)
         : null;
 
       // Settled solve: beta-style deterministic candidate enumeration. Rank
@@ -2963,7 +2958,7 @@ async function runSolver(inPlace = false, pinAll = false) {
           if (solveGeneration !== _solverRunGeneration) return;
           if (relaxedBaseline?.feasible)
             relaxedBestMetrics = _metastorageSolveMetrics(
-              relaxedBaseline, variables, recipeList, gasPlacementVars, null,
+              relaxedBaseline, variables, recipeList, null,
             );
         }
         for (const itemId of allMetaCandidates) {
@@ -2983,7 +2978,7 @@ async function runSolver(inPlace = false, pinAll = false) {
             solveStamp.textContent = `Optimising Meta transfer (${metaCandidatesEvaluated}/${allMetaCandidates.length})...`;
           if (!candidateResult?.feasible) continue;
           const metrics = _metastorageSolveMetrics(
-            candidateResult, variables, recipeList, gasPlacementVars, meta,
+            candidateResult, variables, recipeList, meta,
           );
           if (!relaxedBestMetrics || _isBetterMetastorageSolve(metrics, relaxedBestMetrics, mainOpType)) {
             relaxedBestMetrics = metrics;
@@ -3004,7 +2999,7 @@ async function runSolver(inPlace = false, pinAll = false) {
           if (solveGeneration !== _solverRunGeneration) return;
           const exactCandidateMetrics = exactCandidate?.feasible
             ? _metastorageSolveMetrics(
-              exactCandidate, variables, recipeList, gasPlacementVars, selectedMeta,
+              exactCandidate, variables, recipeList, selectedMeta,
             )
             : null;
           if (exactCandidateMetrics && (!exactBaselineMetrics || _isBetterMetastorageSolve(

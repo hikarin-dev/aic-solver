@@ -185,7 +185,9 @@ graph = {
 - `x_ri` (one per recipe in the graph, ≥ 0): facility count for recipe `r`.
   The LP optimises these. Post-solve, `x_ri` values are the `recipeFacilityCounts`.
 - `p_gas_ri` (integer): placed-building count for every transmuter or
-  gas-environment recipe, constrained by `x_ri ≤ p_gas_ri`.
+  gas-environment recipe, constrained by `x_ri ≤ p_gas_ri`. It carries the
+  facility-cap, power and vaporizer-coverage coefficients — not the catalyst
+  drain, which is charged to `x_ri`.
 - `surp_X` (one per zero-price dead-end item): surplus absorber. See below.
 
 ### Balance constraints (bal_X)
@@ -229,11 +231,20 @@ moss/seed loop) exist without any caps. See **Why the LP can go Unbounded**.
 
 The gas-era recipes cannot be modeled from `inputs[]` and `outputs[]` alone:
 
-- `transmuter_1` drains 6 Liquid Xiranite/min per **placed** building.
-- `transmuter_2` drains 6 Xiragen/min per **placed** building.
+- `transmuter_1` drains 6 Liquid Xiranite/min per building at **full load**.
+- `transmuter_2` drains 6 Xiragen/min per building at **full load**.
 - Recipes tagged with a gas environment require one whole Gas Dispersing Unit
   per four placed environment machines. Each unit consumes 6 of its environment
   gas/min continuously.
+
+A placed transmuter does drain its catalyst continuously, but in-game the feed
+can be pulse-width modulated or batched so a partially-loaded bank draws only
+the catalyst its load actually needs. The drain is therefore charged against
+**fractional recipe load `x_ri`**, not the whole placed count — a bank at load
+4.87 costs `6 × 4.87`, not `6 × 5`. Charging placements instead overstated
+catalyst by up to `6 × (n − load)` per recipe and understated every downstream
+rate; it is what made this solver report 14.45 SC Wuling Battery on the
+reference plan where the true optimum is 14.75.
 
 `extract_recipes.py` writes the gas-environment tags, Gas Dispersing Unit, and
 four zero-output `vaporize_*` recipes into the generated assets.
@@ -243,15 +254,15 @@ older assets. `GAS_SUSTAIN_CONFIG` holds the LP mappings, and
 
 ```text
 x_recipe <= p_placed
-catalyst balance contribution = -6 * p_placed
+catalyst balance contribution = -6 * x_recipe
 4 * x_vaporize - sum(p_placed for recipes using that environment) >= 0
 x_vaporize is integer
 ```
 
 The same helper is used by the per-item max LP and the global LP. Placement
-variables also own the machine/power objective coefficients and facility-cap
-coefficients, preventing the solver from choosing a cheap fractional plan that
-cannot exist after buildings are rounded.
+variables still own the machine/power objective coefficients, the facility-cap
+coefficients and the vaporizer coverage row — those follow whole buildings and
+must not go fractional. Only the catalyst moved to `x_ri`.
 
 ### Time-share facilities (the repurposed `integerOnly` flag)
 
@@ -429,7 +440,7 @@ item (pure cost) in the summary table and saved-production cards.
 | **Raw material**              | Item in `forcedRawSet` (e.g. ore, water). Unlimited supply, capped only by `rawLimits[]`.        |
 | **Pinned item**               | A fixed item (`p.locked` or `p.id === tempPinnedId`) with rate > 0. Gets an `equal:` constraint. |
 | **x_ri**                      | LP variable: facility count for recipe r. Directly gives `recipeFacilityCounts`.                 |
-| **p_gas_ri**                  | Integer physical placement count used by gas sustain, catalyst drains, and gas facility caps.   |
+| **p_gas_ri**                  | Integer physical placement count used by gas facility caps, power, and vaporizer coverage. Catalyst drains use `x_ri`. |
 | **soloMaxRate[X]**            | Maximum rate of item X if it were the only target given current caps.                            |
 | **calcRate(amt, ct)**         | `amt/ct × 60` — converts "qty per craft" to "qty/min per facility".                             |
 | **surp_X**                    | Surplus variable for zero-price dead-end item X.                                                 |
