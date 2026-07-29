@@ -751,7 +751,8 @@ function buildItemMaxModel(targetId, graph) {
     const cName = `bal_${iid}`;
     const terms = netTermsByItem.get(iid) || [];
     terms.forEach(([ri, coefficient]) => { variables[`x_${ri}`][cName] = coefficient; });
-    if (terms.length) constraints[cName] = { min: 0 };
+    if (terms.length)
+      constraints[cName] = _forcedDisposalBalance(iid, graph) || { min: 0 };
   });
 
   // Raw material caps (replicate global LP's raw_R constraints).
@@ -947,6 +948,34 @@ function isDismantleRecipe(r) {
 // which converts waste lxp_lowpoly back to useful lxp).  The DFS avoids
 // picking them as the primary producer for an item; the augmentation pass
 // adds them back as recyclers once the main graph is built.
+// The zero-output sink that disposes a forced-disposal liquid (Water Treatment
+// Unit: 1 Sewage / 2s, 50 kW, no output). Data-driven — matched by shape, not id.
+//
+// Excess forced-disposal liquid does NOT vanish in game: an uncleared Sewage
+// line backs up and stalls the Cuprium refining that produces it. So the LP
+// must pay for a disposal building rather than treating over-production as
+// free. Backward DFS cannot reach these recipes (no outputs), so the graph
+// builder injects them explicitly, exactly like the `vaporize_*` gas sinks.
+function disposalSinkRecipeFor(itemId) {
+  if (!forcedDisposalSet.has(itemId)) return null;
+  return (recipesByInput[itemId] || []).find(r =>
+    !(r.outputs || []).length
+    && (r.inputs || []).length === 1
+    && r.inputs[0].itemId === itemId) || null;
+}
+
+// Balance bound for a forced-disposal liquid: `= 0`, so every unit produced
+// must be consumed by a real recipe or burned in a Water Treatment Unit — never
+// silently discarded. Returns null (caller falls back to `>= 0`) when the graph
+// holds no sink for it, so a missing disposal path degrades to the old
+// permissive behaviour instead of an infeasible solve.
+function _forcedDisposalBalance(itemId, graph) {
+  if (!forcedDisposalSet.has(itemId)) return null;
+  const consumers = graph.itemConsumedBy.get(itemId);
+  if (!consumers || !consumers.size) return null;
+  return { equal: 0 };
+}
+
 function isDisposalOnlyRecipe(r) {
   const inps = r.inputs || [];
   if (inps.length === 0) return false;
@@ -1220,6 +1249,16 @@ function buildBipartiteGraph(targetIds, recipeOverrides) {
       }
     }
   }
+
+  // Step 2b — Disposal sinks. Every forced-disposal liquid now in the graph
+  // gets its Water Treatment Unit sink, so the LP can pay to clear what the
+  // recyclers above cannot absorb. Without this the balance rows below have no
+  // legal outlet for excess and the solve would go infeasible.
+  graph.itemNodes.forEach((info, iid) => {
+    if (info.isRawMaterial) return;
+    const sink = disposalSinkRecipeFor(iid);
+    if (sink && !graph.recipeNodes.has(sink.id)) addRecipeToGraph(sink);
+  });
 
   // Step 3 — Cycle repair (post-DFS).
   // Compute items reachable from raw materials through current recipes.
@@ -2722,7 +2761,10 @@ async function runSolver(inPlace = false, pinAll = false) {
     terms.forEach(([ri, coefficient]) => {
       variables[`x_${ri}`][cName] = coefficient;
     });
-    if (terms.length) constraints[cName] = pinnedIds.has(iid) ? { equal: pinnedRates.get(iid) || 0 } : { min: 0 };
+    if (!terms.length) return;
+    constraints[cName] = pinnedIds.has(iid)
+      ? { equal: pinnedRates.get(iid) || 0 }
+      : _forcedDisposalBalance(iid, graph) || { min: 0 };
   });
 
   // Raw material caps and facility caps are skipped for pinAll solves —
