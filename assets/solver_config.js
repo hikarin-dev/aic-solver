@@ -35,6 +35,25 @@ window.SOLVER_CONFIG = {
     'item_activity_xiranite_enr_cmpt',
     'item_activity_xiranite_enr_hulu',
     'item_activity_xiranite_enr_tool',
-    'item_activity_xiranite_hulu'
+    'item_activity_xiranite_hulu',
+
+    // Chubby Lung event chain (game 1.5) — LIVE, deliberately left enabled.
+    // Uncomment the block below once the event ends to retire it the same way
+    // the Gourd chain above was retired.
+    //
+    // Uncommenting removes items from ITEMS_DB, which shifts every base36 item
+    // index used by shared links. Regenerate initialization.json and bump
+    // APP_VERSION in endfield_calculator.js at the same time.
+    // 'item_activity_copper_poly',
+    // 'item_activity_copper_poly_cmpt',
+    // 'item_activity_copper_poly_gas',
+    // 'item_activity_copper_poly_tool',
+    // 'item_activity_copper_xiranite_tool',
+    // 'item_activity_xiranite_box',
+    // 'item_activity_xiranite_enr_box',
+    // 'item_activity_xiranite_enr_lung',
+    // 'item_activity_xiranite_enr_nugget',
+    // 'item_activity_xiranite_lung',
+    // 'item_activity_xiranite_nugget',
   ]
 };

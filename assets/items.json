@@ -1478,7 +1478,7 @@
   },
   {
     "id": "item_plant_grass_seed_2",
-    "name": "Yazhen Seed",
+    "name": "Yazhen Seeds",
     "itemType": "Material",
     "iconFile": "item_plant_grass_seed_2.webp",
     "tier": 1,
@@ -1622,7 +1622,7 @@
   },
   {
     "id": "item_plant_sp_seed_1",
-    "name": "Reed Rye Seed",
+    "name": "Reed Rye Seeds",
     "itemType": "Material",
     "iconFile": "item_plant_sp_seed_1.webp",
     "tier": 2,
@@ -1631,7 +1631,7 @@
   },
   {
     "id": "item_plant_sp_seed_2",
-    "name": "Tartpepper Seed",
+    "name": "Tartpepper Seeds",
     "itemType": "Material",
     "iconFile": "item_plant_sp_seed_2.webp",
     "tier": 2,
@@ -1640,7 +1640,7 @@
   },
   {
     "id": "item_plant_sp_seed_3",
-    "name": "Redjade Ginseng Seed",
+    "name": "Redjade Ginseng Seeds",
     "itemType": "Material",
     "iconFile": "item_plant_sp_seed_3.webp",
     "tier": 2,
@@ -1649,7 +1649,7 @@
   },
   {
     "id": "item_plant_sp_seed_4",
-    "name": "Amber Rice Seed",
+    "name": "Amber Rice Seeds",
     "itemType": "Material",
     "iconFile": "item_plant_sp_seed_4.webp",
     "tier": 2,
@@ -1793,12 +1793,111 @@
   },
   {
     "id": "resource_xiranite_gas_vent",
-    "name": "Xigagen (Vent)",
+    "name": "Xiragen (Vent)",
     "itemType": "Resource",
     "iconFile": "item_gas_xiranite.webp",
     "tier": 1,
     "isLiquid": false,
     "asTarget": false,
     "rawUnit": "/min"
+  },
+  {
+    "id": "item_activity_copper_poly",
+    "name": "Proto Xiran-Cuprium",
+    "itemType": "Material",
+    "iconFile": "item_activity_copper_poly.webp",
+    "tier": 4,
+    "isLiquid": false,
+    "asTarget": true
+  },
+  {
+    "id": "item_activity_copper_poly_cmpt",
+    "name": "Proto Xiran-Cuprium Part",
+    "itemType": "Material",
+    "iconFile": "item_activity_copper_poly_cmpt.webp",
+    "tier": 4,
+    "isLiquid": false,
+    "asTarget": true
+  },
+  {
+    "id": "item_activity_copper_poly_gas",
+    "name": "Proto Xiran-Cuprium Gas",
+    "itemType": "Material",
+    "iconFile": "item_activity_copper_poly_gas.webp",
+    "tier": 4,
+    "isLiquid": true,
+    "asTarget": true
+  },
+  {
+    "id": "item_activity_copper_poly_tool",
+    "name": "Proto Xiran-Cuprium Frame",
+    "itemType": "Material",
+    "iconFile": "item_activity_copper_poly_tool.webp",
+    "tier": 4,
+    "isLiquid": false,
+    "asTarget": true
+  },
+  {
+    "id": "item_activity_copper_xiranite_tool",
+    "name": "Proto Cuprium Frame",
+    "itemType": "Material",
+    "iconFile": "item_activity_copper_xiranite_tool.webp",
+    "tier": 3,
+    "isLiquid": false,
+    "asTarget": true
+  },
+  {
+    "id": "item_activity_xiranite_box",
+    "name": "Proto Chubby Lung Shell",
+    "itemType": "Material",
+    "iconFile": "item_activity_xiranite_box.webp",
+    "tier": 3,
+    "isLiquid": false,
+    "asTarget": true
+  },
+  {
+    "id": "item_activity_xiranite_enr_box",
+    "name": "Proto Chubby Lung Heavy Shell",
+    "itemType": "Material",
+    "iconFile": "item_activity_xiranite_enr_box.webp",
+    "tier": 4,
+    "isLiquid": false,
+    "asTarget": true
+  },
+  {
+    "id": "item_activity_xiranite_enr_lung",
+    "name": "Heavy Xiranite Chubby Lung",
+    "itemType": "Material",
+    "iconFile": "item_activity_xiranite_enr_lung.webp",
+    "tier": 5,
+    "isLiquid": false,
+    "asTarget": true
+  },
+  {
+    "id": "item_activity_xiranite_enr_nugget",
+    "name": "Proto Heavy Xiranite",
+    "itemType": "Material",
+    "iconFile": "item_activity_xiranite_enr_nugget.webp",
+    "tier": 4,
+    "isLiquid": false,
+    "asTarget": true
+  },
+  {
+    "id": "item_activity_xiranite_lung",
+    "name": "Xiranite Chubby Lung",
+    "itemType": "Material",
+    "iconFile": "item_activity_xiranite_lung.webp",
+    "tier": 4,
+    "isLiquid": false,
+    "asTarget": true
+  },
+  {
+    "id": "item_activity_xiranite_nugget",
+    "name": "Proto Xiranite",
+    "itemType": "Material",
+    "iconFile": "item_activity_xiranite_nugget.webp",
+    "tier": 3,
+    "isLiquid": false,
+    "asTarget": true
   }
 ]
