@@ -603,10 +603,31 @@ function fmt(n) {
   if (n === undefined || n === null || isNaN(n)) return '—';
   return (n < 0 ? '-' : '') + Math.abs(n).toLocaleString('en', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 }
+// A filled bottle or canister carries its *empty* container's art — the dump
+// ships one icon per container for every fill, so all eleven Amethyst Bottle
+// fills are byte-identical files. Those items carry a fillIcon, and the fluid
+// gets composited over the container the way the game draws it. Everything else
+// stays a single <img>, so the common path costs nothing.
+function iconImgHTML(iconFile, fillIcon, cls = 'mat-icon', attrs = '') {
+  if (!iconFile) return '';
+  const ERR = `onerror="this.style.visibility='hidden'"`;
+  const src = f => `assets/icons/items/${f}`;
+  if (!fillIcon) return `<img src="${src(iconFile)}" class="${cls}" ${attrs} ${ERR}>`;
+  // attrs (title, inline style) go on the wrapper so they cover the whole tile,
+  // including the part the overlay sits on.
+  return `<span class="icon-fill-stack ${cls}" ${attrs}>`
+    + `<img src="${src(iconFile)}" ${ERR}>`
+    + `<img src="${src(fillIcon)}" class="icon-fill" ${ERR}>`
+    + `</span>`;
+}
+function itemIconHTML(itemOrId, cls = 'mat-icon', attrs = '') {
+  const it = typeof itemOrId === 'string' ? itemById[itemOrId] : itemOrId;
+  return it ? iconImgHTML(it.iconFile, it.fillIcon, cls, attrs) : '';
+}
 function icon(id) {
   const it = itemById[id];
   if (!it) return '';
-  return `<img src="assets/icons/items/${it.iconFile}" class="mat-icon" title="${it.name}">`;
+  return itemIconHTML(it, 'mat-icon', `title="${_esc(it.name)}"`);
 }
 function rawMaterialDisplayName(itemOrId) {
   const item = typeof itemOrId === 'string' ? itemById[itemOrId] : itemOrId;
@@ -845,7 +866,7 @@ function filterDepotSearch() {
   const matches = q ? available.filter(it => it.name.toLowerCase().includes(q)) : available;
   dd.innerHTML = matches.length
     ? matches.slice(0, 20).map(it =>
-        `<div class="mat-search-item" onmousedown="pickDepotItem('${it.id}')"><img src="assets/icons/items/${it.iconFile}" class="mat-icon"><span>${it.name}</span></div>`).join('')
+        `<div class="mat-search-item" onmousedown="pickDepotItem('${it.id}')">${itemIconHTML(it)}<span>${it.name}</span></div>`).join('')
     : '<div class="mat-search-empty">No matching items</div>';
   dd.style.display = 'block';
   positionPortal(dd, input);
@@ -897,7 +918,7 @@ function filterRawSearch() {
     .sort((a, b) => rawOrderIndex(a.id) - rawOrderIndex(b.id));
   const matches = q ? available.filter(it => rawMaterialDisplayName(it).toLowerCase().includes(q)) : available;
   dd.innerHTML = matches.length
-    ? matches.slice(0, 20).map(it => `<div class="mat-search-item" onmousedown="pickRawLimit('${it.id}')"><img src="assets/icons/items/${it.iconFile}" class="mat-icon"><span>${rawMaterialDisplayName(it)}</span></div>`).join('')
+    ? matches.slice(0, 20).map(it => `<div class="mat-search-item" onmousedown="pickRawLimit('${it.id}')">${itemIconHTML(it)}<span>${rawMaterialDisplayName(it)}</span></div>`).join('')
     : '<div class="mat-search-empty">No raw materials to add</div>';
   dd.style.display = 'block';
   positionPortal(dd, input);
@@ -1028,7 +1049,7 @@ function filterProdSearch() {
   const matches = (q ? available.filter(it => it.name.toLowerCase().includes(q)) : available)
     .sort((a, b) => priceOf(b.id) - priceOf(a.id));
   dd.innerHTML = matches.length
-    ? matches.slice(0, 20).map(it => `<div class="mat-search-item" onmousedown="pickProdMat('${it.id}')"><img src="assets/icons/items/${it.iconFile}" class="mat-icon"><span>${it.name}</span></div>`).join('')
+    ? matches.slice(0, 20).map(it => `<div class="mat-search-item" onmousedown="pickProdMat('${it.id}')">${itemIconHTML(it)}<span>${it.name}</span></div>`).join('')
     : '<div class="mat-search-empty">No matching items</div>';
   dd.style.display = 'block';
   positionPortal(dd, input);
@@ -1150,7 +1171,7 @@ function renderProducts() {
     d.dataset.prodId = p.id;
     d.innerHTML = `
       <div class="drag-handle"><i data-lucide="grip-vertical" style="width:14px;height:14px;pointer-events:none;"></i></div>
-      <div class="prod-item-icon"><img src="assets/icons/items/${it.iconFile}" class="mat-icon"></div>
+      <div class="prod-item-icon">${itemIconHTML(it)}</div>
       <div class="prod-item-right">
         <div class="prod-item-top">
           <span class="item-name">${it.name}</span>
@@ -1272,7 +1293,7 @@ function filterBatSearch() {
   const available = itemsDB.filter(it => !added.has(it.id) && (it.id.includes('battery') || it.id.includes('proc_battery')));
   const matches = q ? available.filter(it => it.name.toLowerCase().includes(q)) : available;
   dd.innerHTML = matches.length
-    ? matches.slice(0, 20).map(it => `<div class="mat-search-item" onmousedown="pickBatMat('${it.id}')"><img src="assets/icons/items/${it.iconFile}" class="mat-icon"><span>${it.name}</span></div>`).join('')
+    ? matches.slice(0, 20).map(it => `<div class="mat-search-item" onmousedown="pickBatMat('${it.id}')">${itemIconHTML(it)}<span>${it.name}</span></div>`).join('')
     : '<div class="mat-search-empty">No matching batteries</div>';
   dd.style.display = 'block';
   positionPortal(dd, input);
@@ -1298,7 +1319,7 @@ function renderPowerBatteries() {
     const banks = fuel ? pb.rate / fuel.fuelPerMinutePerBank : 0;
     const generation = fuel ? banks * fuel.powerGeneration : 0;
     return `<div class="power-bat-row">
-      <img src="assets/icons/items/${it.iconFile}" class="mat-icon">
+      ${itemIconHTML(it)}
       <span style="flex:1;min-width:0;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${generation.toFixed(1)} power from ${banks.toFixed(2)} sustained Thermal Bank(s) · external fuel cost ${fmt(costHr)}/hr">${it.name}<small style="display:block;color:var(--text3);font-size:9px;">${generation.toFixed(1)} power · ${banks.toFixed(2)} bank</small></span>
       <input type="number" value="${pb.rate}" min="0" step="0.01" class="fac-num-input"
         onchange="powerBatteries[${i}].rate=Math.max(0,+this.value);renderPowerBatteries();computeSummary()">
@@ -1325,7 +1346,7 @@ function filterPriceSearch() {
   const matches = itemsDB.filter(it => isTargetItem(it.id) && it.name.toLowerCase().includes(q)).slice(0, 24);
   dd.innerHTML = matches.length
     ? matches.map(it => `<div class="mat-search-item" onmousedown="addPriceEntry('${it.id}')">
-        <img src="assets/icons/items/${it.iconFile}" class="mat-icon"><span>${it.name}</span>
+        ${itemIconHTML(it)}<span>${it.name}</span>
         ${prices[it.id] ? `<span style="font-size:10px;color:var(--text3);margin-left:auto;">${prices[it.id]}</span>` : ''}
       </div>`).join('')
     : '<div class="mat-search-empty">No matching items</div>';
@@ -1350,7 +1371,7 @@ function renderPricesTab() {
     d.className = 'item-row';
     d.style.gridTemplateColumns = 'auto 1fr 80px auto';
     d.style.gap = '0.5rem';
-    d.innerHTML = `<img src="assets/icons/items/${it.iconFile}" class="mat-icon">
+    d.innerHTML = `${itemIconHTML(it)}
       <span class="item-name">${it.name}</span>
       <input class="num-input" type="number" value="${prices[id]}" min="0"
         onchange="prices['${id}']=+this.value;setPrice()">
@@ -1419,9 +1440,7 @@ const RECIPE_SLOT_MIN = 2;
 function _recipeSlotsHTML(list) {
   const slots = (list || []).map(io => {
     const it = itemById[io.itemId];
-    const icon = it
-      ? `<img src="assets/icons/items/${it.iconFile}" class="rcp-slot-img" onerror="this.style.visibility='hidden'">`
-      : '';
+    const icon = itemIconHTML(it, 'rcp-slot-img');
     return `<span class="rcp-slot ${rarityClass(it)}" title="${_esc(it?.name || io.itemId)}">`
       + `${icon}<span class="rcp-slot-n">${_fmtN(io.amount)}</span></span>`;
   });
@@ -1625,8 +1644,8 @@ function sumGridCols() {
 }
 function sumGridWidth() { return SUM_COLS.product + SUM_COLS.perMin + SUM_COLS.price + SUM_COLS.bill; }
 
-function buildSumProductRow(itemId, iconFile, name, perMinCell, sell, ihr) {
-  return `<div class="sg-cell td-name"><img src="assets/icons/items/${iconFile}" class="mat-icon">${name}</div>
+function buildSumProductRow(itemId, iconFile, name, perMinCell, sell, ihr, fillIcon) {
+  return `<div class="sg-cell td-name">${iconImgHTML(iconFile, fillIcon)}${name}</div>
     <div class="sg-cell" data-summary-rate="${itemId}">${perMinCell}</div>
     <div class="sg-cell sg-right" style="color:var(--text2);">${sell}</div>
     <div class="sg-cell sg-right ${ihr > 0 ? 'td-pos' : ihr < 0 ? 'td-neg' : ''}" data-summary-bill="${itemId}">${fmt(ihr)}</div>`;
@@ -1722,7 +1741,7 @@ function renderSummaryTable(netRates, fixedCost, incremental = false) {
     <div class="sg-cell sg-head">Per minute</div>
     <div class="sg-cell sg-head sg-right">Price</div>
     <div class="sg-cell sg-head sg-right">Bill / hour</div>
-    ${rows.map(({ id, it, ihr, perMinCell }) => buildSumProductRow(id, it.iconFile, it.name, perMinCell, priceOf(it.id), ihr)).join('')}
+    ${rows.map(({ id, it, ihr, perMinCell }) => buildSumProductRow(id, it.iconFile, it.name, perMinCell, priceOf(it.id), ihr, it.fillIcon)).join('')}
     ${buildSumTotalRows(totals)}
     <div class="sg-cell sg-save-row" style="grid-column:1/-1;"><button class="btn-save-snapshot" onclick="saveSnapshot()">Save Production</button></div>
   </div>`;
@@ -1785,7 +1804,7 @@ function renderUsageBars(plan, incremental = false) {
     const tip = `${displayName}: generated ${flow.generated.toFixed(3)}/min (${flow.imported.toFixed(3)} imported), consumed ${flow.consumed.toFixed(3)}/min, net ${netText}/min`;
     resourceUpdates.set(itemId, { localPct, importPct, usePct, over, nums, tip });
     return `<div class="res-bar-row" data-resource-id="${itemId}">
-      <span class="res-bar-label" title="${tip}"><img src="assets/icons/items/${item.iconFile}" class="mat-icon" style="margin-right:3px;">${displayName}${labelBadges}</span>
+      <span class="res-bar-label" title="${tip}">${itemIconHTML(item, 'mat-icon', 'style="margin-right:3px;"')}${displayName}${labelBadges}</span>
       <div class="res-flow-track" title="${tip}">
         <div class="res-flow-half generated"><span class="res-flow-local" style="width:${localPct.toFixed(2)}%"></span><span class="res-flow-import" style="width:${importPct.toFixed(2)}%"></span></div>
         <div class="res-flow-half consumed"><span class="${over ? 'bar-over' : 'res-flow-consumed'}" style="width:${usePct.toFixed(2)}%"></span></div>
@@ -2119,7 +2138,7 @@ function snapshotRowsFromCurrent() {
     if (Math.abs(net) < 5e-4) return;
     const it = itemById[p.id]; if (!it) return;
     const batRate = batRateMap[p.id] || 0;
-    rows.push({ name: it.name, iconFile: it.iconFile, rate: net, grossRate: p.rate || 0, batRate, sell: priceOf(p.id), ihr: priceOf(p.id) * net * 60, locked: !!p.locked });
+    rows.push({ name: it.name, iconFile: it.iconFile, fillIcon: it.fillIcon, rate: net, grossRate: p.rate || 0, batRate, sell: priceOf(p.id), ihr: priceOf(p.id) * net * 60, locked: !!p.locked });
   });
   // Battery-only rows
   powerBatteries.forEach(pb => {
@@ -2127,7 +2146,7 @@ function snapshotRowsFromCurrent() {
     const it = itemById[pb.matId]; if (!it) return;
     const net = -pb.rate;
     if (Math.abs(net) < 5e-4) return;
-    rows.push({ name: it.name, iconFile: it.iconFile, rate: net, grossRate: 0, batRate: 0, sell: priceOf(pb.matId), ihr: priceOf(pb.matId) * net * 60, locked: false });
+    rows.push({ name: it.name, iconFile: it.iconFile, fillIcon: it.fillIcon, rate: net, grossRate: 0, batRate: 0, sell: priceOf(pb.matId), ihr: priceOf(pb.matId) * net * 60, locked: false });
   });
   return rows;
 }
@@ -2226,7 +2245,7 @@ function renderSavedTab() {
       const rateSpan = r.batRate > 0
         ? `<span>${_fmtN(r.grossRate)}</span><span style="color:var(--text3);margin-left:0.3em;">(-${_fmtN(r.batRate)})</span>`
         : `<span>${_fmtN(r.rate)}</span>`;
-      return buildSumProductRow(`snapshot_${rowIndex}`, r.iconFile, r.name, `<span class="per-min-wrap">${lockMark}${rateSpan}</span>`, r.sell, r.ihr);
+      return buildSumProductRow(`snapshot_${rowIndex}`, r.iconFile, r.name, `<span class="per-min-wrap">${lockMark}${rateSpan}</span>`, r.sell, r.ihr, r.fillIcon);
     }).join('');
     const totals = [
       { label: 'Income', labelStyle: 'color:var(--text2);', valueCls: 'sg-right td-pos', valueHTML: fmt(snap.totalIhr) },
