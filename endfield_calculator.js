@@ -243,6 +243,54 @@ let _pendingUrlPrices = null; // localStorage prices deferred past loadPrices()
 function _fmtN(n) { return parseFloat(n.toFixed(3)).toString(); }
 function _fmtExportN(n) { return parseFloat(n.toFixed(6)).toString(); }
 
+/* ── dr= bitmap codec ────────────────────────────────────────────────────────
+   The disabled-recipe list is a bitmap over recipe indices rather than a list of
+   them: one bit per recipe instead of ~3 characters each. Switching all 326
+   recipes off is 55 characters here against roughly 940 as a base36 comma list,
+   and the cost stays flat as the catalogue grows. 4096 bits is the reserved
+   ceiling — 512 bytes, 683 characters at its absolute worst — which leaves room
+   for more than ten times today's catalogue.
+
+   Only bytes up to the highest set bit are emitted, so a few low indices still
+   encode short; the flip side is that one recipe switched off near the end of
+   the catalogue costs the full run of bytes up to it. */
+const DR_BITMAP_BITS = 4096;
+const _B64URL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+
+function _drBitmapEncode(indices) {
+  const usable = indices.filter(i => i >= 0 && i < DR_BITMAP_BITS);
+  if (!usable.length) return '';
+  const bytes = new Uint8Array((Math.max(...usable) >> 3) + 1);
+  usable.forEach(i => { bytes[i >> 3] |= 1 << (i & 7); });
+  // base64url, unpadded — '=' would only be percent-encoded in a fragment.
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const n = (bytes[i] << 16) | ((bytes[i + 1] || 0) << 8) | (bytes[i + 2] || 0);
+    const chars = (bytes.length - i);            // 1, 2 or 3 bytes left
+    out += _B64URL[(n >> 18) & 63] + _B64URL[(n >> 12) & 63]
+      + (chars > 1 ? _B64URL[(n >> 6) & 63] : '')
+      + (chars > 2 ? _B64URL[n & 63] : '');
+  }
+  return out;
+}
+
+function _drBitmapDecode(s) {
+  const indices = [];
+  for (let i = 0; i < s.length; i += 4) {
+    // Each 4 base64 chars carry 3 bytes; a trailing group of 2 or 3 carries 1 or 2.
+    const q = [0, 1, 2, 3].map(k => _B64URL.indexOf(s[i + k] ?? ''));
+    if (q[0] < 0 || q[1] < 0) break;             // malformed tail — stop cleanly
+    const n = (q[0] << 18) | (q[1] << 12) | ((q[2] < 0 ? 0 : q[2]) << 6) | (q[3] < 0 ? 0 : q[3]);
+    const bytes = [n >> 16 & 255, n >> 8 & 255, n & 255].slice(0, q[2] < 0 ? 1 : q[3] < 0 ? 2 : 3);
+    bytes.forEach((b, bi) => {
+      for (let bit = 0; bit < 8; bit++) {
+        if (b & (1 << bit)) indices.push(((i >> 2) * 3 + bi) * 8 + bit);
+      }
+    });
+  }
+  return indices;
+}
+
 const ENDFIELD_CALC_BETA_URL = 'https://jambochen.github.io/endfield-calc/beta/';
 const ENDFIELD_LAB_URL = 'https://endfield-calc.github.io/aef/list';
 
@@ -374,10 +422,15 @@ function encodeStateToUrl() {
       }).join(','));
 
     // Only the switched-off recipes travel, so this key is absent for everyone
-    // who has not touched the Recipes tab.
-    if (disabledRecipes.size)
-      parts.push('dr=' + [...disabledRecipes]
-        .map(id => recipeIdxById.get(id)?.toString(36) ?? id).join(','));
+    // who has not touched the Recipes tab. An id with no index cannot be placed
+    // in the bitmap and is dropped; that only happens for a recipe the current
+    // catalogue no longer has, which the link could not describe anyway.
+    if (disabledRecipes.size) {
+      const idx = [...disabledRecipes]
+        .map(id => recipeIdxById.get(id))
+        .filter(i => i !== undefined);
+      if (idx.length) parts.push('dr=' + _drBitmapEncode(idx));
+    }
 
     const autoSolve = document.getElementById('auto-solve-toggle')?.checked ?? true;
     parts.push('as=' + (autoSolve ? '1' : '0'));
@@ -410,13 +463,12 @@ function decodeStateFromUrl(hash = location.hash) {
     function resolveFacId(tok) {
       return tok.includes('_') ? tok : (gameFacilities[parseInt(tok, 36)]?.id ?? tok);
     }
-    function resolveRecipeId(tok) {
-      return tok.includes('_') ? tok : (recipesDB[parseInt(tok, 36)]?.id ?? tok);
-    }
 
     // A link without `dr` describes an all-recipes-enabled build, so this has to
-    // clear any filter already in effect rather than leave it standing.
-    setDisabledRecipes((map.dr || '').split(',').filter(Boolean).map(resolveRecipeId));
+    // clear any filter already in effect rather than leave it standing. An index
+    // past the end of the catalogue is dropped — recipes can be retired.
+    setDisabledRecipes(
+      _drBitmapDecode(map.dr || '').map(i => recipesDB[i]?.id).filter(Boolean));
 
     if (map.t) {
       const decodedProduction = map.t.split(',').filter(Boolean).map(seg => {
