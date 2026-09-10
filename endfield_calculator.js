@@ -15,32 +15,59 @@ const facilityTypeById = Object.fromEntries(gameFacilities.map(f => [f.id, f]));
 const itemById         = Object.fromEntries(itemsDB.map(i => [i.id, i]));
 
 // Index maps for compact base36 URL encoding
-const itemIdxById = new Map(itemsDB.map((it, i) => [it.id, i]));
-const facIdxById  = new Map(gameFacilities.map((f, i) => [f.id, i]));
+const itemIdxById   = new Map(itemsDB.map((it, i) => [it.id, i]));
+const facIdxById    = new Map(gameFacilities.map((f, i) => [f.id, i]));
+const recipeIdxById = new Map(recipesDB.map((r, i) => [r.id, i]));
 
-// itemId -> [recipe, ...] that produce it
-const recipesByOutput = (() => {
+// Recipes the user switched off in the Recipes tab. Everything is enabled by
+// default, so this set holds only the exceptions and stays empty for most users.
+let disabledRecipes = new Set();
+function isRecipeEnabled(id) { return !disabledRecipes.has(id); }
+
+function _indexRecipesBy(key, list) {
   const m = {};
-  recipesDB.forEach(r => {
-    (r.outputs || []).forEach(o => {
-      if (!m[o.itemId]) m[o.itemId] = [];
-      m[o.itemId].push(r);
+  list.forEach(r => {
+    (r[key] || []).forEach(io => {
+      if (!m[io.itemId]) m[io.itemId] = [];
+      m[io.itemId].push(r);
     });
   });
   return m;
-})();
+}
 
-// itemId -> [recipe, ...] that consume it
-const recipesByInput = (() => {
-  const m = {};
-  recipesDB.forEach(r => {
-    (r.inputs || []).forEach(i => {
-      if (!m[i.itemId]) m[i.itemId] = [];
-      m[i.itemId].push(r);
-    });
-  });
-  return m;
-})();
+// *All maps index the full catalogue and never change. They exist so the graph
+// builder can tell "nothing in the game produces this" (a genuine raw material)
+// apart from "the user switched off every producer" (a dead end, which must not
+// become a free source). Everything else reads the filtered maps below.
+const recipesByOutputAll = _indexRecipesBy('outputs', recipesDB);
+const recipesByInputAll  = _indexRecipesBy('inputs',  recipesDB);
+
+// itemId -> [recipe, ...] that produce / consume it, enabled recipes only.
+let recipesByOutput = recipesByOutputAll;
+let recipesByInput  = recipesByInputAll;
+
+// Rebuild the filtered indexes after disabledRecipes changes. Callers must also
+// drop the graph and bound caches — see applyRecipeToggles().
+function rebuildRecipeIndexes() {
+  if (!disabledRecipes.size) {
+    recipesByOutput = recipesByOutputAll;
+    recipesByInput  = recipesByInputAll;
+    return;
+  }
+  const enabled = recipesDB.filter(r => isRecipeEnabled(r.id));
+  recipesByOutput = _indexRecipesBy('outputs', enabled);
+  recipesByInput  = _indexRecipesBy('inputs',  enabled);
+}
+
+// Replace the whole set — used by the state loaders (localStorage, URL,
+// snapshots), which run their own re-render and solve afterwards. Unknown ids
+// are dropped so a link made against different recipe data cannot disable
+// something arbitrary.
+function setDisabledRecipes(list) {
+  disabledRecipes = new Set((Array.isArray(list) ? list : []).filter(id => recipeById[id]));
+  rebuildRecipeIndexes();
+  invalidateGraphCache();
+}
 
 // itemId -> true if it can be a production target
 // (has at least one recipe, not forced-raw, asTarget !== false)
@@ -87,6 +114,10 @@ let production     = [];   // items the user wants to produce
 let rawLimits      = [];
 let facilityLimits = [];
 let powerBatteries = [];
+// Depot stockpiles: { matId, stock: number|null, ratePerMin }.
+// `stock` null means "don't track a quantity" — the LP is unaffected either way,
+// since only ratePerMin enters the model (see _addDepotSupply).
+let depotItems     = [];
 let outpostCostDefault = 59688;
 let autoMetaTransfer = false;
 let roundUpFacilities = false;
@@ -95,16 +126,23 @@ let _lastChangedProdId = null;  // item last touched by the user
 let _infeasibleProdId  = null;  // item to highlight red on LP infeasible
 let _prodSortable      = null;  // SortableJS instance for the production list
 
+// Cap a raw resource starts at when first added to the panel, in /min.
+// Ores reflect a typical mid-game outpost's yield; the three unmetered
+// utilities (water, acid, Inergen) start effectively uncapped. Listed in
+// RAW_DISPLAY_ORDER. Anything unlisted falls back to 100.
 const RAW_DEFAULT_CAPS = {
-  'item_originium_ore': 590,
-  'item_iron_ore':      90,
+  'item_originium_ore': 540,
   'item_quartz_sand':   240,
-  'item_copper_ore':    240,
-  'resource_xiranite_gas_vent': 20,
+  'item_iron_ore':      120,
+  'item_copper_ore':    510,
+  'item_liquid_water':  999,
+  'item_liquid_acid':   999,
+  'item_gas_inert':     999,
+  'resource_xiranite_gas_vent': 150,
 };
 
 const RAW_LIMIT_SCHEMA_VERSION = 2;
-const XIGAGEN_VENT_ID = 'resource_xiranite_gas_vent';
+const XIRAGEN_VENT_ID = 'resource_xiranite_gas_vent';
 
 // Recipe-pin schema. Before v1, a production entry's `recipeId` stored the
 // *resolved* recipe — `addProductionItem` wrote `recipesByOutput[id][0]` even
@@ -138,20 +176,20 @@ const RAW_DISPLAY_ORDER = [
   'item_liquid_water',           // Water
   'item_liquid_acid',            // Acid
   'item_gas_inert',              // Inergen
-  'resource_xiranite_gas_vent',  // Xigagen
+  'resource_xiranite_gas_vent',  // Xiragen
 ];
 const rawOrderIndex = id => {
   const i = RAW_DISPLAY_ORDER.indexOf(id);
   return i === -1 ? RAW_DISPLAY_ORDER.length : i;
 };
 
-// Raw limits used to store Xigagen as a vent count (1 == 20/min). Keep old
+// Raw limits used to store Xiragen as a vent count (1 == 20/min). Keep old
 // saved states and shared URLs equivalent after changing the UI to throughput.
 function migrateRawLimits(limits, schemaVersion) {
   const legacyVentUnits = Number(schemaVersion || 1) < RAW_LIMIT_SCHEMA_VERSION;
   return (Array.isArray(limits) ? limits : []).map(limit => {
     const copy = { ...limit };
-    if (legacyVentUnits && copy.matId === XIGAGEN_VENT_ID)
+    if (legacyVentUnits && copy.matId === XIRAGEN_VENT_ID)
       copy.cap = (Number(copy.cap) || 0) * 20;
     return copy;
   });
@@ -178,9 +216,10 @@ function _doSave() {
     const autoSolve = document.getElementById('auto-solve-toggle')?.checked ?? true;
     const outpostCost = parseFloat((document.getElementById('outpost-cost')?.value||'').replace(/,/g,'')) || outpostCostDefault;
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      production, rawLimits, facilityLimits, powerBatteries,
+      production, rawLimits, facilityLimits, powerBatteries, depotItems,
       prices, autoSolve, prioritizeUnsellable: prioritizeUnsellableOn(), outpostCost,
       autoMetaTransfer, roundUpFacilities,
+      disabledRecipes: [...disabledRecipes],
       rawLimitSchemaVersion: RAW_LIMIT_SCHEMA_VERSION,
       recipePinSchemaVersion: RECIPE_PIN_SCHEMA_VERSION
     }));
@@ -327,6 +366,19 @@ function encodeStateToUrl() {
         return key + ':' + _fmtN(b.rate);
       }).join(','));
 
+    if (depotItems.length)
+      parts.push('dp=' + depotItems.map(e => {
+        const key = itemIdxById.get(e.matId)?.toString(36) ?? e.matId;
+        // idx:rate[:stock] — stock is left off when the depot is unlimited.
+        return key + ':' + _fmtN(e.ratePerMin) + (e.stock == null ? '' : ':' + _fmtN(e.stock));
+      }).join(','));
+
+    // Only the switched-off recipes travel, so this key is absent for everyone
+    // who has not touched the Recipes tab.
+    if (disabledRecipes.size)
+      parts.push('dr=' + [...disabledRecipes]
+        .map(id => recipeIdxById.get(id)?.toString(36) ?? id).join(','));
+
     const autoSolve = document.getElementById('auto-solve-toggle')?.checked ?? true;
     parts.push('as=' + (autoSolve ? '1' : '0'));
     if (prioritizeUnsellableOn()) parts.push('pu=1');
@@ -349,7 +401,7 @@ function decodeStateFromUrl(hash = location.hash) {
       if (eq >= 0) map[part.slice(0, eq)] = part.slice(eq + 1);
     });
     // Require at least one recognised side-pane key (also rejects old #s= base64 URLs)
-    if (!map.t && !map.rl && !map.fl && !map.b && map.as === undefined && map.mt === undefined && map.c === undefined && !map.oc) return false;
+    if (!map.t && !map.rl && !map.fl && !map.b && !map.dr && !map.dp && map.as === undefined && map.mt === undefined && map.c === undefined && !map.oc) return false;
 
     // Resolve a token that is either a full item/facility ID or a base36 index
     function resolveItemId(tok) {
@@ -358,6 +410,13 @@ function decodeStateFromUrl(hash = location.hash) {
     function resolveFacId(tok) {
       return tok.includes('_') ? tok : (gameFacilities[parseInt(tok, 36)]?.id ?? tok);
     }
+    function resolveRecipeId(tok) {
+      return tok.includes('_') ? tok : (recipesDB[parseInt(tok, 36)]?.id ?? tok);
+    }
+
+    // A link without `dr` describes an all-recipes-enabled build, so this has to
+    // clear any filter already in effect rather than leave it standing.
+    setDisabledRecipes((map.dr || '').split(',').filter(Boolean).map(resolveRecipeId));
 
     if (map.t) {
       const decodedProduction = map.t.split(',').filter(Boolean).map(seg => {
@@ -391,6 +450,13 @@ function decodeStateFromUrl(hash = location.hash) {
       }).filter(f => f.gameFacilityId);
     }
 
+    // A link without `dp` describes an empty depot, so this always applies.
+    depotItems = normalizeDepot((map.dp || '').split(',').filter(Boolean).map(seg => {
+      const [tok, rate, stock] = seg.split(':');
+      return { matId: resolveItemId(tok), ratePerMin: parseFloat(rate) || 0,
+               stock: stock === undefined ? null : parseFloat(stock) };
+    }));
+
     if (map.b) {
       powerBatteries = map.b.split(',').filter(Boolean).map(seg => {
         const [tok, rate] = seg.split(':');
@@ -417,7 +483,7 @@ function decodeStateFromUrl(hash = location.hash) {
 
 const VISITED_KEY = 'epc_visited';
 const VERSION_KEY  = 'epc_version';
-const APP_VERSION  = '1.4';
+const APP_VERSION  = '1.5';
 
 /* The version-gated default config lives in initialization.json as a single
    readable hash string ("config"), the same format as a shared link (parsed by
@@ -434,7 +500,11 @@ function _applyStateSnapshot(s) {
     rawLimits = migrateRawLimits(s.rawLimits, s.rawLimitSchemaVersion);
   if (Array.isArray(s.facilityLimits)) facilityLimits = s.facilityLimits;
   if (Array.isArray(s.powerBatteries)) powerBatteries = s.powerBatteries;
+  depotItems = normalizeDepot(s.depotItems);
   if (s.prices && typeof s.prices === 'object') _pendingUrlPrices = s.prices;
+  // Always applied, never "only if present": a half-restored recipe filter would
+  // silently solve a different graph than the state being loaded describes.
+  setDisabledRecipes(s.disabledRecipes);
   if (s.outpostCost != null) outpostCostDefault = s.outpostCost;
   if (s.autoMetaTransfer != null) autoMetaTransfer = !!s.autoMetaTransfer;
   if (s.roundUpFacilities != null) roundUpFacilities = !!s.roundUpFacilities;
@@ -542,6 +612,13 @@ function rawMaterialDisplayName(itemOrId) {
   const item = typeof itemOrId === 'string' ? itemById[itemOrId] : itemOrId;
   return item?.rawLimitName || item?.name || (typeof itemOrId === 'string' ? itemOrId : '');
 }
+// Rarity class for anything that paints itself by an item's tier (production
+// rows, raw-limit rows, recipe ingredient slots). Sets --rarity via CSS.
+function rarityClass(itemOrId) {
+  const item = typeof itemOrId === 'string' ? itemById[itemOrId] : itemOrId;
+  return `rar-t${Math.min(5, Math.max(1, Number(item?.tier) || 1))}`;
+}
+
 function facIcon(typeId) {
   const file = facilityTypeById[typeId]?.iconFile || `${typeId}.webp`;
   return `<img src="assets/icons/facilities/${file}" class="mat-icon" onerror="this.style.visibility='hidden'">`;
@@ -583,6 +660,7 @@ function switchTab(t) {
   document.querySelectorAll('.page').forEach(el => el.classList.remove('active'));
   document.getElementById('page-' + t).classList.add('active');
   if (t === 'prices') renderPricesTab();
+  if (t === 'recipes') renderRecipesTab();
   if (t === 'saved') renderSavedTab();
   const app = document.querySelector('.app');
   if (app && window.matchMedia('(max-width: 1100px)').matches) app.classList.remove('side-mobile-open');
@@ -613,7 +691,7 @@ function renderResources() {
     const it = itemById[rl.matId];
     if (!it) return;
     const d = document.createElement('div');
-    d.className = 'item-row';
+    d.className = `item-row rar-edge ${rarityClass(it)}`;
     d.style.gridTemplateColumns = 'auto 1fr 72px auto auto';
     d.style.gap = '0.375rem';
     d.innerHTML = `${icon(rl.matId)}<span class="item-name">${rawMaterialDisplayName(it)}</span>
@@ -631,6 +709,159 @@ function delRawLimit(i) {
   invalidateChainCache();
   renderResources(); saveStateNow(); recomputeMaxForRaw(); renderProducts();
   if (autoSolveOn()) runSolver(); else runSolver(false, true);
+}
+
+/* ═══════════════════════════════════════════════
+   DEPOT PANEL
+   Pre-crafted stock the plan may draw on. Only the per-minute rate reaches the
+   LP (as a capped supply, like a raw material); the quantity drives the
+   time-to-empty readout.
+═══════════════════════════════════════════════ */
+
+// "1d 3h 2m" from minutes. Days and hours are dropped once they are zero so the
+// common short cases stay short.
+function _fmtDuration(minutes) {
+  if (!isFinite(minutes) || minutes <= 0) return null;
+  const total = Math.floor(minutes);
+  const d = Math.floor(total / 1440);
+  const h = Math.floor((total % 1440) / 60);
+  const m = total % 60;
+  const parts = [];
+  if (d) parts.push(`${d}d`);
+  if (h || d) parts.push(`${h}h`);
+  parts.push(`${m}m`);
+  return parts.join(' ');
+}
+
+// Restore depot entries from any saved shape, dropping unknown items so a state
+// written against different item data cannot smuggle a phantom supply into the LP.
+function normalizeDepot(list) {
+  return (Array.isArray(list) ? list : [])
+    .filter(e => e && itemById[e.matId])
+    .map(e => ({
+      matId: e.matId,
+      stock: (e.stock == null || !isFinite(e.stock) || e.stock < 0) ? null : Number(e.stock),
+      ratePerMin: Math.max(0, Number(e.ratePerMin) || 0),
+    }));
+}
+
+function depotDrainLabel(entry) {
+  const rate = Number(entry.ratePerMin) || 0;
+  // No quantity tracked — the LP already treats the supply as unlimited, so say
+  // so rather than leaving the line blank.
+  if (entry.stock == null) return 'Infinite Supply';
+  if (!(rate > 0)) return 'Not drawn — set a rate';
+  const txt = _fmtDuration(entry.stock / rate);
+  return txt ? `Empties in ${txt}` : 'Empty';
+}
+
+function renderDepot() {
+  const el = document.getElementById('depot-list');
+  if (!el) return;
+  // Column captions only make sense once there is a row under them.
+  document.getElementById('depot-head')?.toggleAttribute('hidden', !depotItems.length);
+  el.innerHTML = '';
+  if (!depotItems.length) {
+    el.innerHTML = '<div class="empty-state" style="font-size:11px;">No depot stock — add an item the plan may draw from</div>';
+    document.getElementById('depot-pill').textContent = '0';
+    return;
+  }
+  depotItems.forEach((entry, di) => {
+    const it = itemById[entry.matId];
+    if (!it) return;
+    const d = document.createElement('div');
+    d.className = `depot-row ${rarityClass(it)}`;
+    const drain = depotDrainLabel(entry);
+    d.innerHTML = `
+      <div class="depot-main">
+        ${icon(entry.matId)}<span class="item-name">${it.name}</span>
+        <input class="num-input depot-stock" type="number" min="0" placeholder="∞"
+          title="Stock on hand. Leave empty for an unlimited depot."
+          value="${entry.stock == null ? '' : entry.stock}"
+          onchange="setDepotStock(${di}, this.value)">
+        <input class="num-input depot-rate" type="number" min="0" step="any"
+          title="Rate the plan may draw this item from the depot"
+          value="${entry.ratePerMin}"
+          onchange="setDepotRate(${di}, this.value)">
+        <span class="prod-max-label">/min</span>
+        <button class="icon-btn del" onclick="delDepotItem(${di})">✕</button>
+      </div>
+      <div class="depot-sub">${drain || ''}</div>`;
+    el.appendChild(d);
+  });
+  document.getElementById('depot-pill').textContent = depotItems.length;
+}
+
+// Stock is presentation-only, so it needs no solve — just a re-render for the
+// time-to-empty line and a save.
+function setDepotStock(i, value) {
+  const raw = String(value).trim();
+  const n = parseFloat(raw);
+  depotItems[i].stock = raw === '' || !isFinite(n) || n < 0 ? null : n;
+  saveStateNow();
+  renderDepot();
+}
+
+function setDepotRate(i, value) {
+  depotItems[i].ratePerMin = Math.max(0, parseFloat(value) || 0);
+  applyDepotChange();
+}
+
+function delDepotItem(i) {
+  depotItems.splice(i, 1);
+  applyDepotChange();
+}
+
+// The rate is a supply constraint, so any change to it re-solves exactly like a
+// raw or facility limit does.
+function applyDepotChange() {
+  invalidateChainCache();
+  renderDepot(); saveStateNow(); recomputeMaxForRaw(); renderProducts();
+  if (autoSolveOn()) runSolver(); else runSolver(false, true);
+}
+
+function getDepotPortal() {
+  let el = document.getElementById('depot-portal');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'depot-portal';
+    el.className = 'mat-search-dropdown';
+    el.style.cssText = 'position:fixed;z-index:9999;display:none;';
+    document.body.appendChild(el);
+  }
+  return el;
+}
+
+function filterDepotSearch() {
+  const input = document.getElementById('new-depot-input'); if (!input) return;
+  const dd = getDepotPortal();
+  const q = input.value.trim().toLowerCase();
+  const taken = new Set(depotItems.map(e => e.matId));
+  // Anything the chain can consume is fair game — unlike raw limits this is not
+  // restricted to forced raws, since the whole point is stocked intermediates.
+  const available = itemsDB
+    .filter(it => !taken.has(it.id))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const matches = q ? available.filter(it => it.name.toLowerCase().includes(q)) : available;
+  dd.innerHTML = matches.length
+    ? matches.slice(0, 20).map(it =>
+        `<div class="mat-search-item" onmousedown="pickDepotItem('${it.id}')"><img src="assets/icons/items/${it.iconFile}" class="mat-icon"><span>${it.name}</span></div>`).join('')
+    : '<div class="mat-search-empty">No matching items</div>';
+  dd.style.display = 'block';
+  positionPortal(dd, input);
+}
+
+function closeDepotSearch() {
+  const dd = document.getElementById('depot-portal');
+  if (dd) dd.style.display = 'none';
+}
+
+function pickDepotItem(matId) {
+  const input = document.getElementById('new-depot-input'); if (input) input.value = '';
+  closeDepotSearch();
+  if (depotItems.find(e => e.matId === matId)) return;
+  depotItems.push({ matId, stock: null, ratePerMin: 0 });
+  applyDepotChange();
 }
 
 function positionPortal(dd, anchor) {
@@ -821,6 +1052,11 @@ function addProductionItem(id) {
   invalidateChainCache();
   _lastGraph = null; _lastFacilityCounts = null; _lastPlacementCounts = null;
   renderAll();
+  // recomputeMax above only publishes the cheap facility-count estimate. The
+  // exact bound is computed in runSolver's singleMaxRate phase, so without this
+  // the new row keeps the estimate until some unrelated action happens to kick
+  // off a solve. Same trigger every other panel mutation uses.
+  if (autoSolveOn()) runSolver(); else runSolver(false, true);
 }
 function removeFromProduction(id) {
   const idx = production.findIndex(p => p.id === id);
@@ -830,6 +1066,9 @@ function removeFromProduction(id) {
   invalidateChainCache();
   _lastGraph = null; _lastFacilityCounts = null; _lastPlacementCounts = null;
   renderAll();
+  // Removing a target frees the capacity it held, so the remaining rows' bounds
+  // are stale until the next solve.
+  if (autoSolveOn()) runSolver(); else runSolver(false, true);
 }
 function toggleProdLock(id) {
   const p = prodEntry(id);
@@ -907,7 +1146,7 @@ function renderProducts() {
     const title = p.locked ? 'Unpin (free for solver)' : isTemp ? 'Make permanent pin' : 'Pin (fix for solver)';
     const recipe = recipeFor(p);
     const d = document.createElement('div');
-    d.className = 'prod-item-row' + (p.locked || isTemp ? ' locked' : '');
+    d.className = `prod-item-row ${rarityClass(it)}` + (p.locked || isTemp ? ' locked' : '');
     d.dataset.prodId = p.id;
     d.innerHTML = `
       <div class="drag-handle"><i data-lucide="grip-vertical" style="width:14px;height:14px;pointer-events:none;"></i></div>
@@ -1064,7 +1303,7 @@ function renderPowerBatteries() {
       <input type="number" value="${pb.rate}" min="0" step="0.01" class="fac-num-input"
         onchange="powerBatteries[${i}].rate=Math.max(0,+this.value);renderPowerBatteries();computeSummary()">
       <span class="prod-max-label">/min</span>
-      <button class="icon-btn del" style="width:18px;height:18px;font-size:11px;" onclick="removePowerBattery(${i})">✕</button>
+      <button class="icon-btn del" onclick="removePowerBattery(${i})">✕</button>
     </div>`;
   }).join('');
 }
@@ -1114,12 +1353,209 @@ function renderPricesTab() {
     d.innerHTML = `<img src="assets/icons/items/${it.iconFile}" class="mat-icon">
       <span class="item-name">${it.name}</span>
       <input class="num-input" type="number" value="${prices[id]}" min="0"
-        onchange="prices['${id}']=+this.value;saveState();computeSummary()">
+        onchange="prices['${id}']=+this.value;setPrice()">
       <button class="icon-btn del" onclick="deletePriceEntry('${id}')">✕</button>`;
     el.appendChild(d);
   });
 }
-function deletePriceEntry(id) { delete prices[id]; saveState(); renderPricesTab(); computeSummary(); }
+// Prices are the LP's objective coefficients, so editing one changes which mix
+// is optimal — not just the bill shown for the existing one. computeSummary()
+// alone only re-renders the last solve's rates, which left the plan stale until
+// some unrelated action happened to re-solve.
+function setPrice() {
+  saveState();
+  computeSummary();
+  if (autoSolveOn()) runSolver(); else runSolver(false, true);
+}
+
+function deletePriceEntry(id) { delete prices[id]; renderPricesTab(); setPrice(); }
+
+/* ═══════════════════════════════════════════════
+   RECIPES TAB
+   Every recipe is enabled by default; switching one off removes it from the
+   graph entirely, so the LP may not route through it.
+═══════════════════════════════════════════════ */
+
+// Recipes grouped by producing facility, smallest group first — the short
+// sections stay reachable near the top instead of being buried under the
+// 74- and 80-recipe machines. Facility name breaks ties so the order is stable.
+function recipesByFacility() {
+  const groups = new Map();
+  recipesDB.forEach(r => {
+    if (!groups.has(r.facilityId)) groups.set(r.facilityId, []);
+    groups.get(r.facilityId).push(r);
+  });
+  const facName = id => facilityTypeById[id]?.name || id;
+  return [...groups.entries()]
+    .sort(([a, ra], [b, rb]) => ra.length - rb.length || facName(a).localeCompare(facName(b)))
+    .map(([facilityId, recipes]) => ({
+      facilityId,
+      name: facilityTypeById[facilityId]?.name || facilityId,
+      recipes: recipes.slice().sort((x, y) => recipeDisplayName(x).localeCompare(recipeDisplayName(y))),
+    }));
+}
+
+// The four synthesised sink/plant recipes have no formulaDesc in the game data,
+// so they would otherwise show a raw id. Name them the way the game names the
+// rest, from what they actually do. Their id still shows in the card tooltip.
+function recipeDisplayName(r) {
+  const named = recipeNamesDB[r.id];
+  if (named) return named;
+  const nameOf = io => itemById[io.itemId]?.name || io.itemId;
+  if (!(r.outputs || []).length && (r.inputs || []).length)
+    return `${nameOf(r.inputs[0])} Disposal`;
+  if ((r.outputs || []).length) return `${nameOf(r.outputs[0])} Production`;
+  return r.id;
+}
+
+// The game always shows at least two ingredient and two product slots, filling
+// the unused ones with a struck-through placeholder. Matching that keeps every
+// card's slot row the same shape instead of leaving a single tile floating in
+// the space the uniform card width reserves.
+const RECIPE_SLOT_MIN = 2;
+
+// One ingredient/product slot, mirroring the in-game formula card: square tile,
+// count in the corner, rarity bar along the bottom edge.
+function _recipeSlotsHTML(list) {
+  const slots = (list || []).map(io => {
+    const it = itemById[io.itemId];
+    const icon = it
+      ? `<img src="assets/icons/items/${it.iconFile}" class="rcp-slot-img" onerror="this.style.visibility='hidden'">`
+      : '';
+    return `<span class="rcp-slot ${rarityClass(it)}" title="${_esc(it?.name || io.itemId)}">`
+      + `${icon}<span class="rcp-slot-n">${_fmtN(io.amount)}</span></span>`;
+  });
+  while (slots.length < RECIPE_SLOT_MIN) slots.push('<span class="rcp-slot rcp-slot-empty"></span>');
+  return slots.join('');
+}
+
+function _esc(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// Shared tail for every recipe-filter change: rebuild the indexes, drop the
+// caches keyed on graph topology, clear pins that point at a now-disabled
+// recipe, then persist, re-render and re-solve like any other panel mutation.
+function applyRecipeToggles() {
+  rebuildRecipeIndexes();
+  invalidateGraphCache();
+  invalidateChainCache();
+  _lastGraph = null; _lastFacilityCounts = null; _lastPlacementCounts = null;
+  production.forEach(p => { if (p.recipeId && !isRecipeEnabled(p.recipeId)) p.recipeId = ''; });
+  recomputeAllMax();
+  saveStateNow();
+  renderAll();
+  if (autoSolveOn()) runSolver(); else runSolver(false, true);
+}
+
+function toggleRecipeEnabled(id, on) {
+  if (on) disabledRecipes.delete(id); else disabledRecipes.add(id);
+  applyRecipeToggles();
+  // Patch the affected group's counter in place rather than re-rendering the
+  // whole list, which would drop the user's scroll position mid-review.
+  const r = recipeById[id];
+  if (r) updateRecipeGroupHead(r.facilityId);
+  // Under "Only disabled" the card has just left (or joined) the filtered set.
+  if (document.getElementById('recipe-only-disabled')?.checked) filterRecipeList();
+}
+
+function setFacilityRecipesEnabled(facilityId, on) {
+  recipesDB.forEach(r => {
+    if (r.facilityId !== facilityId) return;
+    if (on) disabledRecipes.delete(r.id); else disabledRecipes.add(r.id);
+  });
+  applyRecipeToggles();
+  renderRecipesTab();
+}
+
+function setAllRecipesEnabled(on) {
+  if (on) disabledRecipes.clear();
+  else recipesDB.forEach(r => disabledRecipes.add(r.id));
+  applyRecipeToggles();
+  renderRecipesTab();
+}
+
+function updateRecipeGroupHead(facilityId) {
+  const all = recipesDB.filter(r => r.facilityId === facilityId);
+  const on  = all.filter(r => isRecipeEnabled(r.id)).length;
+  const countEl = document.querySelector(`.rcp-group-count[data-fac="${facilityId}"]`);
+  if (countEl) {
+    countEl.textContent = `${on} / ${all.length}`;
+    countEl.classList.toggle('rcp-count-off', on < all.length);
+  }
+  const groupCb = document.querySelector(`.rcp-group-cb[data-fac="${facilityId}"]`);
+  if (groupCb) groupCb.checked = on === all.length;
+}
+
+function filterRecipeList() {
+  const q = (document.getElementById('recipe-search-input')?.value || '').trim().toLowerCase();
+  const onlyDisabled = !!document.getElementById('recipe-only-disabled')?.checked;
+  document.querySelectorAll('#recipe-config-list .rcp-group').forEach(group => {
+    let visible = 0;
+    group.querySelectorAll('.rcp-card').forEach(card => {
+      const hit = (!q || (card.dataset.search || '').includes(q))
+        && (!onlyDisabled || !isRecipeEnabled(card.dataset.recipe));
+      card.hidden = !hit;
+      if (hit) visible++;
+    });
+    group.hidden = visible === 0;
+  });
+  const empty = document.getElementById('recipe-empty-state');
+  if (empty) {
+    const anyVisible = [...document.querySelectorAll('#recipe-config-list .rcp-group')].some(g => !g.hidden);
+    empty.hidden = anyVisible;
+    empty.textContent = onlyDisabled && !q
+      ? 'No recipes are disabled'
+      : 'No recipes match this search';
+  }
+}
+
+function renderRecipesTab() {
+  const el = document.getElementById('recipe-config-list');
+  if (!el) return;
+  el.innerHTML = recipesByFacility().map(g => {
+    const on = g.recipes.filter(r => isRecipeEnabled(r.id)).length;
+    const rows = g.recipes.map(r => {
+      const enabled = isRecipeEnabled(r.id);
+      const name = recipeDisplayName(r);
+      // Title and facility. Ingredients stay out: matching on them made
+      // "cuprium" return most of the catalogue and buried the recipe being
+      // looked for, whereas the facility is how you narrow to a machine.
+      const hay = `${name} ${g.name}`.toLowerCase();
+      return `<div class="rcp-card${enabled ? '' : ' rcp-off'}" data-recipe="${_esc(r.id)}" data-search="${_esc(hay)}">
+        <div class="rcp-card-title" title="${_esc(r.id)}">${_esc(name)}</div>
+        <div class="rcp-card-body">
+          <span class="rcp-slots">${_recipeSlotsHTML(r.inputs)}</span>
+          <span class="rcp-conv">
+            <span class="rcp-arrow">&#9656;&#9656;&#9656;</span>
+            <span class="rcp-time">${_fmtN(r.craftingTime)}s</span>
+          </span>
+          <span class="rcp-slots">${_recipeSlotsHTML(r.outputs)}</span>
+          <label class="tog-wrap rcp-card-tog" title="${enabled ? 'Disable this recipe' : 'Enable this recipe'}">
+            <input type="checkbox" class="tog-cb" ${enabled ? 'checked' : ''}
+              onchange="this.closest('.rcp-card').classList.toggle('rcp-off',!this.checked);toggleRecipeEnabled('${r.id}',this.checked)">
+            <span class="tog-track"></span>
+          </label>
+        </div>
+      </div>`;
+    }).join('');
+    return `<div class="rcp-group">
+      <div class="rcp-group-head">
+        ${facIcon(g.facilityId)}
+        <span class="rcp-group-name">${_esc(g.name)}</span>
+        <span class="rcp-group-count${on < g.recipes.length ? ' rcp-count-off' : ''}" data-fac="${g.facilityId}">${on} / ${g.recipes.length}</span>
+        <label class="tog-wrap" title="Toggle every recipe in this facility">
+          <input type="checkbox" class="tog-cb rcp-group-cb" data-fac="${g.facilityId}" ${on === g.recipes.length ? 'checked' : ''}
+            onchange="setFacilityRecipesEnabled('${g.facilityId}',this.checked)">
+          <span class="tog-track"></span>
+        </label>
+      </div>
+      <div class="rcp-cards">${rows}</div>
+    </div>`;
+  }).join('');
+  filterRecipeList();
+}
 
 /* Pipeline helpers, graph builder, flow analysis, solver state, runSolverThrottled → solver_pipeline.js §§ 3–6 */
 
@@ -1717,8 +2153,10 @@ function saveSnapshot() {
       rawLimits:      JSON.parse(JSON.stringify(rawLimits)),
       facilityLimits: JSON.parse(JSON.stringify(facilityLimits)),
       powerBatteries: JSON.parse(JSON.stringify(powerBatteries)),
+      depotItems:     JSON.parse(JSON.stringify(depotItems)),
       autoMetaTransfer,
       roundUpFacilities,
+      disabledRecipes: [...disabledRecipes],
       rawLimitSchemaVersion: RAW_LIMIT_SCHEMA_VERSION,
       outpostCost,
     },
@@ -1741,8 +2179,10 @@ function loadSnapshot(id) {
   );
   facilityLimits = JSON.parse(JSON.stringify(snap.state.facilityLimits || []));
   powerBatteries = JSON.parse(JSON.stringify(snap.state.powerBatteries || []));
+  depotItems     = normalizeDepot(snap.state.depotItems);
   autoMetaTransfer = !!snap.state.autoMetaTransfer;
   roundUpFacilities = !!snap.state.roundUpFacilities;
+  setDisabledRecipes(snap.state.disabledRecipes);
   if (snap.state.outpostCost != null) outpostCostDefault = snap.state.outpostCost;
 
   // renderSummaryTable reads its outpost cost from the LIVE #outpost-cost
@@ -1824,6 +2264,7 @@ function renderAll() {
   const ceilTog = document.getElementById('round-facilities-toggle');
   if (ceilTog) ceilTog.checked = roundUpFacilities;
   renderResources();
+  renderDepot();
   renderFacilities();
   renderProducts();
   renderPowerBatteries();
@@ -1848,6 +2289,11 @@ if (typeof ResizeObserver !== 'undefined') {
 
 // Global click handler — close all search portals
 document.addEventListener('click', e => {
+  const depotPortal = document.getElementById('depot-portal');
+  if (depotPortal && depotPortal.style.display !== 'none') {
+    const input = document.getElementById('new-depot-input');
+    if (input && !input.contains(e.target) && !depotPortal.contains(e.target)) closeDepotSearch();
+  }
   const pricePortal = document.getElementById('price-portal');
   if (pricePortal && pricePortal.style.display !== 'none') {
     const input = document.getElementById('price-search-input');

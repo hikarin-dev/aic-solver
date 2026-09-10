@@ -571,12 +571,42 @@ function _maxCacheKey(id) {
   // (building-count vs slots), so the max rate differs and must re-cache.
   const facKey = facilityLimits.map(f => f.gameFacilityId + ':' + f.cap + ':' + (f.integerOnly ? 1 : 0)).join(',');
   const rawKey = rawLimits.map(r => r.matId + ':' + r.cap).join(',');
+  const depotKey = (typeof depotItems !== 'undefined' ? depotItems : [])
+    .map(d => d.matId + ':' + d.ratePerMin).join(',');
   const metaKey = _metastorageEnabled() ? 'meta:1' : 'meta:0';
-  return id + '|' + recipeId + '|' + facKey + '|' + rawKey + '|' + metaKey;
+  return id + '|' + recipeId + '|' + facKey + '|' + rawKey + '|' + depotKey + '|' + metaKey;
 }
 
 // Invalidate both caches — called whenever the limit fingerprint changes.
 function invalidateMaxCache() { _maxCache.clear(); _singleMaxDirty = true; }
+
+// _addDepotSupply: a pre-crafted stockpile the plan may draw on, at up to the
+// user's per-minute rate. Modelled as a supply variable feeding the item's
+// balance row and capped by that rate — the same shape as a raw material cap or
+// a Metastorage import, so the LP weighs it against producing the item.
+//
+// The stock quantity deliberately does NOT enter the model: the LP is a
+// steady-state rate problem with no time axis, so a finite quantity has no
+// meaning in it. Stock drives the time-to-empty readout only.
+//
+// Shared by the main LP and the per-item max-rate mini-LP so the slider bound
+// reflects the same supply the solve gets.
+function _addDepotSupply(constraints, variables, targetId = null) {
+  if (typeof depotItems === 'undefined' || !Array.isArray(depotItems)) return;
+  depotItems.forEach((d, i) => {
+    const rate = Number(d.ratePerMin) || 0;
+    if (!(rate > 0)) return;
+    const balance = `bal_${d.matId}`;
+    // No balance row means the item is a raw material (already governed by its
+    // raw cap) or absent from this graph. Either way there is nothing to feed.
+    if (!constraints[balance]) return;
+    const name = `depot_${i}`;
+    const capName = `depot_cap_${i}`;
+    constraints[capName] = { max: rate };
+    variables[name] = { [balance]: 1, [capName]: 1 };
+    if (targetId && d.matId === targetId) variables[name].obj = 1;
+  });
+}
 
 // _addFacilityCaps: build the per-facility cap constraints, shared by the main
 // LP and the per-item max-rate mini-LP so both honour the same model.
@@ -770,6 +800,7 @@ function buildItemMaxModel(targetId, graph) {
   const gasPlacementVars = _addGasSustainConstraints(constraints, variables, generals, recipeList);
   _addFacilityCaps(constraints, variables, generals, recipeList, gasPlacementVars);
   _addSourceFacilityCaps(constraints, variables, recipeList, gasPlacementVars);
+  _addDepotSupply(constraints, variables, targetId);
 
   // Single-item profit objective: maximise net production of targetId.
   (netTermsByItem.get(targetId) || []).forEach(([ri, coefficient]) => {
@@ -804,11 +835,19 @@ function buildItemMaxModel(targetId, graph) {
     }
   }
 
-  // A continuous relaxation is sufficient here because this solve only builds
-  // a safety upper bound. It is also important for toggle responsiveness: the
-  // bound may contain every eligible Meta source, but never runs a MIP scan.
-  const maxGenerals = _metastorageEnabled() ? [] : generals;
-  return { optimize: 'obj', opType: 'max', constraints, variables, generals: maxGenerals };
+  // Integrality must match the main solve. This bound is not only a safety
+  // guard — it is the slider's maximum, so a bound the main LP cannot reproduce
+  // leaves a band at the top of the slider that always solves infeasible.
+  // Dropping `generals` here relaxed whole-machine gas placements (p_gas_*) and
+  // the vaporizers sustaining them, so a target reaching two machines in one gas
+  // environment (Heavy Xiranite Chubby Lung: Forge of the Sky and the Xiran-
+  // Cuprium gas reactor both in Inergen) reported a max built from fractional
+  // dispersers — 20.71/min against a true 20.44.
+  //
+  // The cost this once bought is not there: with Meta on the exact bound solves
+  // in ~20 ms against ~5 ms relaxed, still under the ~24 ms the Meta-off path
+  // already pays. Same conclusion as the main solve's own integrality note.
+  return { optimize: 'obj', opType: 'max', constraints, variables, generals };
 }
 
 function _itemMaxFromResult(result) {
@@ -1162,8 +1201,16 @@ function buildBipartiteGraph(targetIds, recipeOverrides) {
 
     const available = recipesByOutput[itemId] || [];
     if (available.length === 0) {
-      graph.itemNodes.get(itemId).isRawMaterial = true;
-      graph.rawMaterials.add(itemId);
+      // Nothing in the catalogue produces this → a genuine raw material. But
+      // when producers do exist and the user switched them all off in the
+      // Recipes tab, the item is a dead end, not a resource: leave it non-raw so
+      // its balance row drives consumers to zero (surfacing as infeasible)
+      // rather than handing the LP a free unlimited source. Same hazard the gas
+      // environment injector guards against below.
+      if (!(recipesByOutputAll[itemId] || []).length) {
+        graph.itemNodes.get(itemId).isRawMaterial = true;
+        graph.rawMaterials.add(itemId);
+      }
       return;
     }
 
@@ -1308,6 +1355,10 @@ function buildBipartiteGraph(targetIds, recipeOverrides) {
 
   return graph;
 }
+
+// Disabling a recipe changes reachability, which the cache key does not cover,
+// so every cached topology has to go. Called from applyRecipeToggles().
+function invalidateGraphCache() { _bipartiteGraphCache.clear(); }
 
 // Graph topology depends only on target IDs and recipe overrides. Resource and
 // facility limits alter bounds, never recipe reachability, so slider/toggle
@@ -2884,6 +2935,11 @@ async function runSolver(inPlace = false, pinAll = false) {
       : _forcedDisposalBalance(iid, graph) || { min: 0 };
   });
 
+  // Depot stockpiles are added for pinAll solves too: they add supply rather
+  // than restrict it, so leaving them out would make a plan that legitimately
+  // draws on the depot look infeasible.
+  _addDepotSupply(constraints, variables);
+
   // Raw material caps and facility caps are skipped for pinAll solves —
   // we only want facility counts for the given rates; limits would cause
   // infeasibility when resources are fully saturated.
@@ -2951,6 +3007,11 @@ async function runSolver(inPlace = false, pinAll = false) {
   // constants.  This "value" form is lex-pass 1 (maximise); buildings and power
   // are minimised in later passes rather than blended in as penalties here.
   const TARGET_WEIGHT = getSolverWeight('target');
+  // Stand-in price for targets when the list carries no revenue at all. Only
+  // has to dwarf the summed machine/power penalty of a whole plan (order 10^2
+  // for the largest builds), so 10^6 leaves four orders of headroom while
+  // staying well under priority mode's 10^9 big-M and its conditioning cost.
+  const DEGENERATE_TARGET_WEIGHT = 1e6;
   // When "Prioritize Unsellable" is on, assign exponentially decreasing weights to
   // zero-price production targets in pane order so each dominates all lower-ranked
   // targets and profit (1e9 >> max_profit; ratio 1000 >> max_rate per item).
@@ -2966,6 +3027,26 @@ async function runSolver(inPlace = false, pinAll = false) {
       }
     });
   }
+  // Degenerate objective: nothing in the list has a price, so there is no
+  // revenue for output to be traded against. The machine/power terms exist only
+  // to break ties between equally profitable plans, but with no revenue present
+  // they become the entire objective and start deciding the answer — a target
+  // stops short of its maximum because the last sliver of output costs more in
+  // penalty than TARGET_WEIGHT pays. Whether it stops is then a property of a
+  // hand-tuned constant rather than of the game.
+  //
+  // Raising `target` or lowering `machine`/`power` globally would only move the
+  // threshold: a big enough step (33 machines at once, in the case this was
+  // found on) defeats any fixed pair, and both distort lists that DO have
+  // priced items. So the weight is lifted only in the case where nothing is
+  // being traded off — every target keeps an equal weight, preserving their
+  // relative balance, at a level the penalties cannot outweigh. Mixed lists are
+  // untouched: there the trade-off is real and the penalties should have a say.
+  const noPricedTarget = !production.some(p => priceOf(p.id) > 0);
+  const targetWeight = (noPricedTarget && TARGET_WEIGHT > 0)
+    ? DEGENERATE_TARGET_WEIGHT
+    : TARGET_WEIGHT;
+
   const effectivePriceByItem = new Map();
   graph.itemNodes.forEach((info, iid) => {
     if (info.isRawMaterial) return;
@@ -2973,7 +3054,7 @@ async function runSolver(inPlace = false, pinAll = false) {
     const pr = priceOf(iid);
     const effectivePrice = (pr > 0 && productionSet.has(iid)) ? pr
       : priorityWeightMap.has(iid) ? priorityWeightMap.get(iid)
-      : (productionSet.has(iid) && TARGET_WEIGHT > 0 ? TARGET_WEIGHT : 0);
+      : (productionSet.has(iid) && targetWeight > 0 ? targetWeight : 0);
     effectivePriceByItem.set(iid, effectivePrice);
     if (effectivePrice <= 0) return;
     (netTermsByItem.get(iid) || []).forEach(([ri, coefficient]) => {

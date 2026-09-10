@@ -39,7 +39,30 @@
   --facility:  #7c9eb5;
   --locked:    #c49a6c;
   --danger:    #f87171;
+
+  /* Item rarity (ItemTable rarity 1-5). Shared by the production list's edge
+     bar and the Recipes tab's ingredient slots so both read the same. */
+  /* Recipe card geometry — every card holds identical furniture (two ingredient
+     slots, conversion block, two product slots, switch), so its width is a
+     constant rather than something to measure at runtime. */
+  --rcp-slot: 2.0625rem;                             /* one square tile */
+  --rcp-side: calc(2 * var(--rcp-slot) + 0.2rem);    /* two tiles + their gap */
+  --rcp-card-w: calc(2 * var(--rcp-side) + 2.4rem + 1.75rem + 0.9rem + 0.6rem + 2px);
+  /*             ↑ both slot pairs        ↑conv   ↑switch  ↑3 gaps ↑padding ↑border */
+
+  --tier1: #8a8f99;
+  --tier2: #6cc47f;
+  --tier3: #5b9fe0;
+  --tier4: #b985e8;
+  --tier5: #f0c541;
 }
+
+/* Sets --rarity for anything that wants to paint itself by item rarity. */
+.rar-t1 { --rarity: var(--tier1); }
+.rar-t2 { --rarity: var(--tier2); }
+.rar-t3 { --rarity: var(--tier3); }
+.rar-t4 { --rarity: var(--tier4); }
+.rar-t5 { --rarity: var(--tier5); }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 .kpi-val, .sg-cell, .prod-rate-display, .prod-max-label, .usage-val, .fac-num-input, .res-input {
@@ -330,11 +353,13 @@ header.top-nav {
 
 .panel-title.purple { color: var(--text); }
 
+/* Box hugs the chevron rather than framing it: no border and no padding, so the
+   glyph itself lands on the header's padding edge. The whole .panel-head is
+   clickable, so the smaller box costs no hit area. */
 .collapse-btn {
-  width: 1.25rem;
+  width: auto;
   height: 1.25rem;
-  border: 1px solid var(--border2);
-  border-radius: 0.1875rem;
+  border: none;
   background: transparent;
   color: var(--text3);
   cursor: pointer;
@@ -342,13 +367,13 @@ header.top-nav {
   align-items: center;
   justify-content: center;
   font-size: 0.6875rem;
-  transition: border-color 0.12s, color 0.12s;
+  transition: color 0.12s;
   flex-shrink: 0;
   padding: 0;
   line-height: 1;
 }
 
-.collapse-btn:hover { border-color: var(--border2); color: var(--text2); }
+.collapse-btn:hover { color: var(--text2); }
 .collapse-btn .chevron { display: inline-block; transition: transform 0.25s cubic-bezier(.4,0,.2,1); }
 .panel.collapsed .chevron { transform: rotate(-90deg); }
 
@@ -387,19 +412,33 @@ header.top-nav {
 .empty-state {
   text-align: center;
   padding: 1.5rem 1.25rem;
-  color: var(--text3);
+  color: var(--text2);
   font-size: 0.75rem;
 }
 
+/* Sub-heading hint beside a page title. */
+.page-head-hint { font-size: 0.6875rem; color: var(--text2); }
+
 /* ITEM ROWS */
+/* Right padding matches the production list's so every panel's ✕ lands on the
+   same vertical line. Left padding is opt-in via .rar-edge, which pairs it with
+   the rarity bar. */
 .item-row {
   display: grid;
   align-items: center;
   gap: 0.3125rem;
-  padding: 0.25rem 0;
+  padding: 0.25rem 0.4375rem 0.25rem 0;
   border-bottom: 1px solid var(--border-inner);
 }
 .item-row:last-child { border-bottom: none; }
+
+/* Opt-in rarity edge for grid item rows (raw resource limits), matching the
+   production list's bar. */
+.item-row.rar-edge {
+  border-left: 3px solid var(--rarity, transparent);
+  border-radius: 2px 0 0 2px;
+  padding-left: 0.4375rem;
+}
 
 .item-name {
   font-size: 0.75rem;
@@ -509,13 +548,18 @@ header.top-nav {
 }
 
 /* PRODUCTION SLIDER ROW */
+/* Rarity edge bar, matching the in-game item list: a colored strip down the
+   left of each row. Rows with no rarity class fall back to transparent, so the
+   layout shift is the same either way. */
 .prod-item-row {
   display: flex;
   flex-direction: row;
   align-items: stretch;
   gap: 0.5rem;
-  padding: 0.375rem 0;
+  padding: 0.375rem 0.4375rem;
   border-bottom: 1px solid var(--border-inner);
+  border-left: 3px solid var(--rarity, transparent);
+  border-radius: 2px 0 0 2px;
 }
 .drag-handle {
   flex-shrink: 0;
@@ -532,7 +576,6 @@ header.top-nav {
 .prod-ghost { opacity: 0.35; background: var(--bg4); border-radius: 6px; }
 .prod-chosen { opacity: 1 !important; background: var(--bg4); border-radius: 6px; }
 .prod-item-row:last-child { border-bottom: none; }
-.prod-item-row:first-child { padding-top: 0; }
 .prod-item-icon {
   flex-shrink: 0;
   display: flex;
@@ -611,7 +654,6 @@ header.top-nav {
   align-items: center;
   gap: 0.375rem;
   padding-bottom: 0.375rem;
-  margin-bottom: 0.25rem;
   border-bottom: 1px solid var(--border-inner);
 }
 .prod-options-combined {
@@ -727,7 +769,8 @@ header.top-nav {
 .icon-btn:hover { border-color: var(--border2); color: var(--text2); background: var(--bg4); }
 .icon-btn.lock-on { border-color: var(--accent); color: var(--accent); background: rgba(160,128,48,.1); }
 .icon-btn.pin-temp { border-color: #3a8a7a; color: #3a8a7a; background: rgba(58,138,122,.1); }
-.icon-btn.del:hover { border-color: var(--danger); color: var(--danger); }
+.icon-btn.del { border-color: transparent; }
+.icon-btn.del:hover { border-color: transparent; color: var(--danger); background: rgba(248,113,113,.12); }
 .icon-btn.infeasible { border-color: var(--danger); color: var(--danger); background: rgba(248,113,113,.1); }
 .prod-slider.infeasible { accent-color: var(--danger); }
 .snap-card .panel-head .icon-btn:hover { background: rgba(0,0,0,0.15); border-color: rgba(0,0,0,0.3); color: var(--accent-fg); }
@@ -1062,22 +1105,40 @@ tr:hover td { background: rgba(255,255,255,.02); }
   border-color: rgba(167,139,250,.32);
   background: rgba(167,139,250,.035);
 }
+/* Scrollbar hidden until hover, like .side-pane. scrollbar-width stays `thin`
+   either way so the gutter is always reserved and the rows never reflow.
+   The negative margin lets the track sit out in the section's own side padding
+   instead of on top of the balance figures; padding-right buys the gap back so
+   the numbers stay clear of it. */
 .intermediate-resource-scroll {
   max-height: min(20rem, 42vh);
   min-width: 0;
+  margin-right: -0.35rem;
+  padding-right: 0.5rem;
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
-  scrollbar-color: var(--border2) transparent;
+  scrollbar-color: transparent transparent;
 }
+.intermediate-resource-scroll:hover { scrollbar-color: var(--border2) transparent; }
 .intermediate-resource-scroll::-webkit-scrollbar { width: 4px; height: 4px; }
 .intermediate-resource-scroll::-webkit-scrollbar-track { background: transparent; }
-.intermediate-resource-scroll::-webkit-scrollbar-thumb { background: var(--border2); }
+.intermediate-resource-scroll::-webkit-scrollbar-button { display: none; }
+.intermediate-resource-scroll::-webkit-scrollbar-thumb {
+  background: transparent;
+  transition: background 0.15s;
+}
+.intermediate-resource-scroll:hover::-webkit-scrollbar-thumb { background: var(--border2); }
+.intermediate-resource-scroll:hover::-webkit-scrollbar-thumb:hover { background: var(--text3); }
 .meta-transfer-row {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 0.35rem;
+  /* Clear the section title's underline. Butted straight against it, the
+     title's straight border showed through either side of this row's rounded
+     top corners as a stray stub of line. */
+  margin-top: 0.35rem;
   padding: 0.45rem 0.55rem;
   border: 1px solid rgba(167,139,250,.35);
   border-radius: 6px;
@@ -1351,7 +1412,7 @@ tr:hover td { background: rgba(255,255,255,.02); }
   display: flex;
   align-items: center;
   gap: 0.375rem;
-  padding: 0.3125rem 0;
+  padding: 0.3125rem 0.4375rem 0.3125rem 0;
   border-bottom: 1px solid var(--border-inner);
   flex-wrap: wrap;
 }
@@ -1775,3 +1836,263 @@ tr:hover td { background: rgba(255,255,255,.02); }
 }
 .footer-link:hover { color: var(--text); }
 .footer-sep { font-size: 0.75rem; color: var(--text3); }
+
+/* ── RECIPES TAB ─────────────────────────────────────────────────────────────
+   One collapsible-free list grouped by producing facility. Rows carry their own
+   search haystack in data-search, so filtering is a hidden-attribute pass with
+   no re-render. */
+/* The query container must be the parent: inline-size containment makes an
+   element's width independent of its contents, which would fight the panel's
+   own fit-content sizing. */
+#page-recipes .materials-area { container: recipes / inline-size; }
+
+#recipe-config-list.result-table-wrap {
+  padding: 0.25rem 0.625rem;
+  width: fit-content;
+  max-width: 100%;
+  /* fit-content leaves the panel narrower than the row; centre the leftover so
+     it sits evenly either side instead of banking up on the right. */
+  margin-inline: auto;
+}
+
+.rcp-bulk { display: flex; gap: 0.375rem; }
+
+.rcp-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin-left: auto;
+  font-size: 0.6875rem;
+  color: var(--text2);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.rcp-filter:hover { color: var(--text); }
+
+.rcp-group { margin: 0.25rem 0 0.75rem; }
+.rcp-group[hidden] { display: none; }
+
+.rcp-group-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.25rem;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-raised, var(--bg-inset));
+  border-bottom: 1px solid var(--border);
+}
+.rcp-group-name { font-size: 0.8125rem; font-weight: 600; color: var(--text); }
+.rcp-group-count {
+  font-size: 0.6875rem;
+  color: var(--text3);
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+}
+.rcp-count-off { color: var(--accent); font-weight: 600; }
+
+/* Formula cards — the in-game Auto-Production Formulas layout: title above a
+   bordered body of ingredient slots, a conversion arrow with the craft time,
+   product slots, then the enable switch where the game puts its pin. Packed
+   into an auto-fill grid so several sit per row instead of one per line. */
+/* Every card holds the same furniture — two ingredient slots, the conversion
+   block, two product slots, the switch — because empty sides are padded with
+   placeholders. So the width is a constant, not something to measure at
+   runtime: --rcp-card-w is the sum of those fixed parts. Cards stay that width
+   (fixed tracks, never 1fr) and auto-fill reflows the column count on resize
+   and zoom by itself; centring the tracks keeps the leftover split evenly
+   instead of stranding it all down the right edge. */
+.rcp-cards {
+  display: grid;
+  /* An explicit column count, not auto-fill: auto-fill needs a definite width
+     to resolve against, which forces the panel to span the full row and strand
+     the remainder as padding down both sides. With the count fixed per step the
+     grid has an intrinsic width, so the panel can shrink to exactly the columns
+     it shows (see #recipe-config-list). Steps come from the container's width,
+     so they follow the panel rather than the viewport. */
+  grid-template-columns: repeat(1, var(--rcp-card-w));
+  justify-content: start;
+  gap: 0.25rem 0.35rem;
+  padding: 0.35rem 0 0.15rem;
+}
+
+/* Column steps. Each threshold is N cards + their gaps + the panel's padding.
+   Card = 14.3rem + 2px of border; gap 0.35rem; panel padding 1.25rem. */
+@container recipes (min-width: 30.5rem)  { .rcp-cards { grid-template-columns: repeat(2, var(--rcp-card-w)); } }
+@container recipes (min-width: 45.3rem)  { .rcp-cards { grid-template-columns: repeat(3, var(--rcp-card-w)); } }
+@container recipes (min-width: 60.1rem)  { .rcp-cards { grid-template-columns: repeat(4, var(--rcp-card-w)); } }
+@container recipes (min-width: 74.9rem)  { .rcp-cards { grid-template-columns: repeat(5, var(--rcp-card-w)); } }
+@container recipes (min-width: 89.7rem)  { .rcp-cards { grid-template-columns: repeat(6, var(--rcp-card-w)); } }
+@container recipes (min-width: 104.5rem) { .rcp-cards { grid-template-columns: repeat(7, var(--rcp-card-w)); } }
+
+.rcp-card { min-width: 0; }
+.rcp-card[hidden] { display: none; }
+.rcp-off { opacity: 0.45; }
+
+.rcp-card-title {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--text2);
+  padding: 0 0.15rem 0.2rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rcp-off .rcp-card-title { text-decoration: line-through; }
+
+.rcp-card-body {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 0.3125rem;
+  width: 100%;
+}
+
+.rcp-slots { display: flex; flex-wrap: wrap; align-items: center; gap: 0.2rem; min-width: 0; }
+
+/* Slot: square tile, rarity bar along the bottom edge, count in the corner —
+   the same read as the game's ingredient tiles. */
+.rcp-slot {
+  position: relative;
+  width: var(--rcp-slot, 2.0625rem);
+  height: var(--rcp-slot, 2.0625rem);
+  border-radius: 0.1875rem;
+  background: var(--bg4);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-bottom-color: var(--rarity, var(--tier1));
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.rcp-slot-img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.rcp-slot-n {
+  position: absolute;
+  left: 0.0625rem;
+  bottom: 0.0625rem;
+  padding: 0 0.15rem;
+  font-size: 0.625rem;
+  font-weight: 700;
+  line-height: 1.15;
+  color: var(--text);
+  background: rgba(0,0,0,0.62);
+  border-radius: 0.125rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Consumed with no product (disposal sinks) — the game's struck-through slot. */
+.rcp-slot-empty { background: transparent; border-style: dashed; border-bottom-width: 1px; border-bottom-color: var(--border); }
+.rcp-slot-empty::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top right, transparent calc(50% - 1px), var(--border) 50%, transparent calc(50% + 1px));
+}
+
+.rcp-conv {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  gap: 0.1rem;
+  flex-shrink: 0;
+  width: 2.4rem;   /* fixed: "10s" is wider than "2s" */
+}
+.rcp-arrow { font-size: 0.6875rem; color: var(--text2); letter-spacing: -0.05em; }
+.rcp-time { font-size: 0.5625rem; color: var(--text3); font-variant-numeric: tabular-nums; }
+
+/* Pinned to the right edge. Every card is the same width now, so this lines
+   the switches up in a column instead of leaving them ragged behind rows of
+   differing slot counts. Auto margins collapse to 0 during intrinsic sizing,
+   so this does not affect the measured width. */
+.rcp-card-tog { flex-shrink: 0; margin-left: auto; }
+
+
+
+/* ── DEPOT PANEL ─────────────────────────────────────────────────────────────
+   Stock the plan may draw on. The stock box is presentation-only (time to
+   empty); the /min box is the supply cap that reaches the LP. */
+/* Header and rows share one track template and gap, so each label is centred
+   over the control it names no matter how the panel is sized. --depot-cols is
+   the single definition; changing it moves both. */
+.depot-head-row,
+.depot-main {
+  --depot-cols: 1.4rem 1fr 3.6rem 3.6rem 1.9rem 1.4rem;
+  display: grid;
+  grid-template-columns: var(--depot-cols);
+  column-gap: 0.5rem;
+  align-items: center;
+}
+
+.depot-head-row {
+  align-items: end;
+  border-left: 3px solid transparent;
+  /* Padding must match .depot-row on BOTH sides: the 1fr name column soaks up
+     any width the header does not spend, so a short right padding here slides
+     every fixed column out from under the control it labels. */
+  padding: 0 0.4375rem 0.25rem;
+  /* The body's 0.5625rem top padding is sized for content, not a caption, and
+     left the labels sitting closer to their own rule than to the panel header.
+     Pull the row up so the space above the text matches the space below it. */
+  margin-top: -0.3125rem;
+  border-bottom: 1px solid var(--border-inner);
+  font-size: 0.5625rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text2);
+}
+.depot-head-row > span { text-align: center; }
+.depot-head-row[hidden] { display: none; }
+
+.depot-row {
+  padding: 0.25rem 0.4375rem;
+  border-bottom: 1px solid var(--border-inner);
+  border-left: 3px solid var(--rarity, transparent);
+  border-radius: 2px 0 0 2px;
+}
+.depot-row:last-child { border-bottom: none; }
+
+
+.depot-stock, .depot-rate { width: 100%; min-width: 0; }
+.depot-stock::placeholder { color: var(--text2); font-size: 0.875rem; }
+
+/* Time-to-empty, indented under the item name. */
+/* Rendered even when empty (an unlimited depot has no time-to-empty), with one
+   line reserved so rows keep a uniform height either way. */
+.depot-sub {
+  padding-left: 1.775rem;
+  font-size: 0.625rem;
+  color: var(--text3);
+  line-height: 1.4;
+  min-height: 1.4em;
+}
+
+/* ── SIDE-PANE DELETE BUTTONS ────────────────────────────────────────────────
+   Revealed on row hover so the panels read as data rather than a wall of ✕.
+   Faded rather than removed from flow, otherwise every row would reflow as the
+   pointer travels down the list. Kept reachable by keyboard via :focus-visible,
+   and always shown where there is no hover (touch). */
+.side-pane .icon-btn.del {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s, border-color 0.12s, color 0.12s, background 0.12s;
+}
+.side-pane .prod-item-row:hover .icon-btn.del,
+.side-pane .item-row:hover .icon-btn.del,
+.side-pane .depot-row:hover .icon-btn.del,
+.side-pane .power-bat-row:hover .icon-btn.del,
+.side-pane .icon-btn.del:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: none) {
+  .side-pane .icon-btn.del { opacity: 1; pointer-events: auto; }
+}
