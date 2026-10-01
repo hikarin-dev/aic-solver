@@ -1727,6 +1727,10 @@ tr:hover td { background: rgba(255,255,255,.02); }
 
 #price-config-list.result-table-wrap { padding: 0.25rem 0.625rem; }
 
+/* Price profile switcher — the header's tab strip, minus its push to the right */
+.tabs.price-profiles { margin-left: 0; }
+#price-reset-btn:disabled { opacity: 0.4; cursor: default; filter: none; }
+
 #mat-config-list {
   /* sits directly on --bg, already dark */
 }

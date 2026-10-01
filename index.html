@@ -237,11 +237,13 @@
       <div class="mat-page-head">
         <span class="panel-title">Item Prices</span>
         <span class="page-head-hint">Set sell price per item — used by the LP objective</span>
+        <div id="price-profile-tabs" class="tabs price-profiles" title="Outpost price profile — each keeps its own edits"></div>
         <div class="mat-search-wrap">
           <input type="text" id="price-search-input" class="mat-search-input" placeholder="Search items…"
             autocomplete="off" oninput="filterPriceSearch()" onfocus="filterPriceSearch()">
           <div id="price-search-dropdown" class="mat-search-dropdown"></div>
         </div>
+        <button id="price-reset-btn" class="btn-load-snapshot" onclick="resetPriceProfile()" disabled>Reset to defaults</button>
       </div>
       <div id="price-config-list" class="result-table-wrap"><div class="empty-state">Search for items above to set their sell price</div></div>
     </main>

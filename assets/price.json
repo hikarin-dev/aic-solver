@@ -1,15 +1,43 @@
 {
-  "_comment": "Default sell prices in ¤/unit. Loaded by the calculator on first run if no localStorage state exists. Edit freely; missing items default to 0.",
-  "item_activity_xiranite_enr_lung": 200,
-  "item_activity_xiranite_lung": 100,
-  "item_copper_enr2_cmpt": 70,
-  "item_proc_battery_5": 54,
-  "item_copper_enr_cmpt": 48,
-  "item_xiranite_enr_powder": 27,
-  "item_proc_battery_4": 25,
-  "item_bottled_rec_hp_5": 22,
-  "item_bottled_food_5": 22,
-  "item_bottled_rec_hp_4": 16,
-  "item_bottled_food_4": 16,
-  "item_xiranite_powder": 1
+  "_comment": "Sell-price profiles in ¤/unit, one per region's outposts (from SettlementBasicDataTable settlementTradeItemMap). The first profile is the default; the Prices tab switches between them. User edits are stored as differences from these values, so changing one here reaches everyone who has not overridden that item. Missing items default to 0.",
+  "profiles": [
+    {
+      "id": "wuling",
+      "name": "Wuling",
+      "prices": {
+        "item_activity_xiranite_enr_lung": 200,
+        "item_activity_xiranite_lung": 100,
+        "item_copper_enr2_cmpt": 70,
+        "item_proc_battery_5": 54,
+        "item_copper_enr_cmpt": 48,
+        "item_xiranite_enr_powder": 27,
+        "item_proc_battery_4": 25,
+        "item_bottled_rec_hp_5": 22,
+        "item_bottled_food_5": 22,
+        "item_bottled_rec_hp_4": 16,
+        "item_bottled_food_4": 16,
+        "item_xiranite_powder": 1
+      }
+    },
+    {
+      "id": "valley",
+      "name": "Valley IV",
+      "prices": {
+        "item_proc_battery_3": 70,
+        "item_bottled_rec_hp_3": 70,
+        "item_bottled_food_3": 70,
+        "item_proc_battery_2": 30,
+        "item_bottled_rec_hp_2": 27,
+        "item_bottled_food_2": 27,
+        "item_proc_battery_1": 16,
+        "item_bottled_rec_hp_1": 10,
+        "item_bottled_food_1": 10,
+        "item_iron_enr_cmpt": 3,
+        "item_glass_bottle": 2,
+        "item_iron_cmpt": 1,
+        "item_glass_cmpt": 1,
+        "item_crystal_shell": 1
+      }
+    }
+  ]
 }

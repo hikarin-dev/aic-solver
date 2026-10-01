@@ -79,21 +79,58 @@ function isTargetItem(id) {
 }
 
 /* ═══════════════════════════════════════════════
-   PRICES  (loaded from assets/price.json)
+   PRICES  (profiles loaded from assets/price.json)
+   A profile is one region's outpost buy list; the first bundled one is the
+   default. `prices` is always the live map of the active profile, so priceOf()
+   and the solver never need to know profiles exist. Each profile keeps its own
+   edits, persisted as a diff against the bundled values (priceOverrides), so
+   swapping back and forth loses nothing and a later change to price.json still
+   reaches every item the user has not touched.
 ═══════════════════════════════════════════════ */
-let prices = {};   // { itemId: number }
+let priceProfiles  = [];   // [{ id, name, prices }] as bundled
+let profilePrices  = {};   // { profileId: { itemId: number } } — live, possibly edited
+let priceProfileId = '';
+let prices = {};           // === profilePrices[priceProfileId]
+
 async function loadPrices() {
   try {
     const r = await fetch('assets/price.json');
     if (r.ok) {
       const data = await r.json();
-      Object.entries(data).forEach(([k, v]) => {
-        if (k !== '_comment') prices[k] = Number(v) || 0;
-      });
+      priceProfiles = (data.profiles || []).map(p => ({
+        id: p.id,
+        name: p.name || p.id,
+        prices: Object.fromEntries(Object.entries(p.prices || {}).map(([k, v]) => [k, Number(v) || 0])),
+      }));
     }
   } catch (e) {}
 }
 function priceOf(id) { return prices[id] ?? 0; }
+
+function defaultPriceProfileId() { return priceProfiles[0]?.id || ''; }
+function bundledPrices(profileId) { return priceProfiles.find(p => p.id === profileId)?.prices || {}; }
+
+// What the user changed in a profile: a number for an added or re-priced item,
+// null for a bundled item they removed.
+function priceOverrides(profileId) {
+  const base = bundledPrices(profileId), live = profilePrices[profileId] || base;
+  const diff = {};
+  Object.entries(live).forEach(([id, v]) => { if (base[id] !== v) diff[id] = v; });
+  Object.keys(base).forEach(id => { if (!(id in live)) diff[id] = null; });
+  return diff;
+}
+function applyPriceOverrides(profileId, overrides) {
+  const map = { ...bundledPrices(profileId) };
+  Object.entries(overrides || {}).forEach(([id, v]) => {
+    if (v === null) delete map[id];
+    else if (Number.isFinite(Number(v))) map[id] = Number(v);
+  });
+  profilePrices[profileId] = map;
+}
+function selectPriceProfile(profileId) {
+  priceProfileId = priceProfiles.some(p => p.id === profileId) ? profileId : defaultPriceProfileId();
+  prices = profilePrices[priceProfileId] ||= { ...bundledPrices(priceProfileId) };
+}
 
 // Solver cost weights loaded from assets/solver_config.js (window.SOLVER_CONFIG).
 function getSolverWeight(key) {
@@ -108,7 +145,7 @@ function getSolverWeight(key) {
      integerOnly: when true, all x_ri for this facility are declared as
      integers in the LP General section (MIP solve).
    powerBatteries[]: { matId, rate }
-   prices: { itemId: number }  (persisted separately)
+   prices: { itemId: number }  (active price profile — see PRICES)
 ═══════════════════════════════════════════════ */
 let production     = [];   // items the user wants to produce
 let rawLimits      = [];
@@ -217,7 +254,9 @@ function _doSave() {
     const outpostCost = parseFloat((document.getElementById('outpost-cost')?.value||'').replace(/,/g,'')) || outpostCostDefault;
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       production, rawLimits, facilityLimits, powerBatteries, depotItems,
-      prices, autoSolve, prioritizeUnsellable: prioritizeUnsellableOn(), outpostCost,
+      priceProfile: priceProfileId,
+      priceOverrides: Object.fromEntries(priceProfiles.map(p => [p.id, priceOverrides(p.id)])),
+      autoSolve, prioritizeUnsellable: prioritizeUnsellableOn(), outpostCost,
       autoMetaTransfer, roundUpFacilities,
       disabledRecipes: [...disabledRecipes],
       rawLimitSchemaVersion: RAW_LIMIT_SCHEMA_VERSION,
@@ -236,9 +275,13 @@ function _doSave() {
    Append :i to a facility entry to mark it integer-only (MIP solve).
    pv is the recipe-pin schema version; a link without it predates the fix for
    phantom pins, so its :recipe_id segments are dropped on decode.
-   Prices live in localStorage only (separate Prices tab).
+   pp is the active price profile and pr its edits against the bundled prices,
+   as item:price, with item:- for a bundled item that was removed. Only the
+   active profile travels; a link with pp but no pr means its bundled prices.
 ═══════════════════════════════════════════════ */
-let _pendingUrlPrices = null; // localStorage prices deferred past loadPrices()
+// Both deferred past loadPrices(), which they need to resolve against:
+let _pendingSavedPrices = null; // { profileId, overrides: { profileId: diff } } from localStorage
+let _pendingLinkPrices  = null; // { profileId, overrides: diff } from a link's pp/pr
 
 function _fmtN(n) { return parseFloat(n.toFixed(3)).toString(); }
 function _fmtExportN(n) { return parseFloat(n.toFixed(6)).toString(); }
@@ -432,6 +475,16 @@ function encodeStateToUrl() {
       if (idx.length) parts.push('dr=' + _drBitmapEncode(idx));
     }
 
+    if (priceProfileId) {
+      parts.push('pp=' + priceProfileId);
+      const edits = Object.entries(priceOverrides(priceProfileId));
+      if (edits.length)
+        parts.push('pr=' + edits.map(([id, v]) => {
+          const key = itemIdxById.get(id)?.toString(36) ?? id;
+          return key + ':' + (v === null ? '-' : _fmtN(v));
+        }).join(','));
+    }
+
     const autoSolve = document.getElementById('auto-solve-toggle')?.checked ?? true;
     parts.push('as=' + (autoSolve ? '1' : '0'));
     if (prioritizeUnsellableOn()) parts.push('pu=1');
@@ -454,7 +507,7 @@ function decodeStateFromUrl(hash = location.hash) {
       if (eq >= 0) map[part.slice(0, eq)] = part.slice(eq + 1);
     });
     // Require at least one recognised side-pane key (also rejects old #s= base64 URLs)
-    if (!map.t && !map.rl && !map.fl && !map.b && !map.dr && !map.dp && map.as === undefined && map.mt === undefined && map.c === undefined && !map.oc) return false;
+    if (!map.t && !map.rl && !map.fl && !map.b && !map.dr && !map.dp && !map.pp && !map.pr && map.as === undefined && map.mt === undefined && map.c === undefined && !map.oc) return false;
 
     // Resolve a token that is either a full item/facility ID or a base36 index
     function resolveItemId(tok) {
@@ -516,6 +569,20 @@ function decodeStateFromUrl(hash = location.hash) {
       }).filter(b => b.matId);
     }
 
+    // Links from before price profiles carry neither key and say nothing about
+    // prices, so the saved ones stay in effect for them.
+    if (map.pp || map.pr) {
+      const overrides = {};
+      (map.pr || '').split(',').filter(Boolean).forEach(seg => {
+        const [tok, v] = seg.split(':');
+        const id = resolveItemId(tok);
+        if (!itemById[id]) return;
+        if (v === '-') overrides[id] = null;
+        else if (Number.isFinite(parseFloat(v))) overrides[id] = parseFloat(v);
+      });
+      _pendingLinkPrices = { profileId: map.pp || '', overrides };
+    }
+
     if (map.as !== undefined) {
       const tog = document.getElementById('auto-solve-toggle');
       if (tog) tog.checked = map.as !== '0';
@@ -553,7 +620,6 @@ function _applyStateSnapshot(s) {
   if (Array.isArray(s.facilityLimits)) facilityLimits = s.facilityLimits;
   if (Array.isArray(s.powerBatteries)) powerBatteries = s.powerBatteries;
   depotItems = normalizeDepot(s.depotItems);
-  if (s.prices && typeof s.prices === 'object') _pendingUrlPrices = s.prices;
   // Always applied, never "only if present": a half-restored recipe filter would
   // silently solve a different graph than the state being loaded describes.
   setDisabledRecipes(s.disabledRecipes);
@@ -570,7 +636,39 @@ function _applyStateSnapshot(s) {
   if (ceilTog) ceilTog.checked = roundUpFacilities;
 }
 
+// Saved prices apply on every load path, not just the localStorage one: every
+// save also writes the URL hash, so a refresh always arrives through a link, and
+// a link only describes the profile it was made on (the default config none).
+function _readSavedPrices() {
+  try {
+    const s = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    if (s?.priceOverrides && typeof s.priceOverrides === 'object')
+      _pendingSavedPrices = { profileId: s.priceProfile || '', overrides: s.priceOverrides };
+    // Before profiles, the whole price map was saved on its own.
+    else if (s?.prices && typeof s.prices === 'object')
+      _pendingSavedPrices = { profileId: '', legacyPrices: s.prices };
+  } catch (e) {}
+}
+
+// Runs once loadPrices() and loadState() have both settled. A link's prices
+// win for the profile it names; every other profile keeps its saved edits.
+function initPriceProfiles() {
+  const saved = _pendingSavedPrices || {};
+  const savedOverrides = saved.overrides
+    || (saved.legacyPrices ? { [defaultPriceProfileId()]: saved.legacyPrices } : {});
+  priceProfiles.forEach(p => applyPriceOverrides(p.id, savedOverrides[p.id]));
+  let active = saved.profileId;
+  if (_pendingLinkPrices) {
+    active = priceProfiles.some(p => p.id === _pendingLinkPrices.profileId)
+      ? _pendingLinkPrices.profileId : defaultPriceProfileId();
+    applyPriceOverrides(active, _pendingLinkPrices.overrides);
+  }
+  selectPriceProfile(active);
+  _pendingSavedPrices = _pendingLinkPrices = null;
+}
+
 async function loadState() {
+  _readSavedPrices();
   if (decodeStateFromUrl()) return; // URL hash takes priority over localStorage
 
   // Version-gated default: any user whose stored version differs from the
@@ -729,7 +827,7 @@ function invalidateChainCache() { invalidateMaxCache(); }
 function togglePanel(id) { document.getElementById(id).classList.toggle('collapsed'); }
 
 function switchTab(t) {
-  document.querySelectorAll('.tab').forEach(el => el.classList.toggle('active', el.dataset.tab === t));
+  document.querySelectorAll('.tab[data-tab]').forEach(el => el.classList.toggle('active', el.dataset.tab === t));
   document.querySelectorAll('.page').forEach(el => el.classList.remove('active'));
   document.getElementById('page-' + t).classList.add('active');
   if (t === 'prices') renderPricesTab();
@@ -1411,8 +1509,31 @@ function addPriceEntry(id) {
   closePriceSearch();
   if (!prices[id]) prices[id] = 0;
   renderPricesTab();
+  saveState();   // a 0 price changes no solve, but the row should survive a refresh
+}
+function renderPriceProfileBar() {
+  const tabs = document.getElementById('price-profile-tabs');
+  if (tabs) tabs.innerHTML = priceProfiles.map(p =>
+    `<button class="tab${p.id === priceProfileId ? ' active' : ''}" onclick="setPriceProfile('${p.id}')">${p.name}</button>`).join('');
+  const reset = document.getElementById('price-reset-btn');
+  if (reset) reset.disabled = !Object.keys(priceOverrides(priceProfileId)).length;
+}
+function setPriceProfile(id) {
+  if (id === priceProfileId) return;
+  selectPriceProfile(id);
+  renderPricesTab();
+  setPrice();
+}
+function resetPriceProfile() {
+  const name = priceProfiles.find(p => p.id === priceProfileId)?.name || priceProfileId;
+  if (!confirm(`Reset the ${name} prices to their defaults?`)) return;
+  applyPriceOverrides(priceProfileId, {});
+  selectPriceProfile(priceProfileId);
+  renderPricesTab();
+  setPrice();
 }
 function renderPricesTab() {
+  renderPriceProfileBar();
   const el = document.getElementById('price-config-list'); if (!el) return;
   const priced = Object.keys(prices).filter(id => itemById[id]);
   if (!priced.length) { el.innerHTML = '<div class="empty-state">Search for items above to set their sell price</div>'; return; }
@@ -1436,6 +1557,7 @@ function renderPricesTab() {
 // alone only re-renders the last solve's rates, which left the plan stale until
 // some unrelated action happened to re-solve.
 function setPrice() {
+  renderPriceProfileBar();
   saveState();
   computeSummary();
   if (autoSolveOn()) runSolver(); else runSolver(false, true);
@@ -2393,9 +2515,7 @@ document.addEventListener('click', e => {
 });
 
 Promise.all([loadPrices(), loadState()]).then(() => {
-  // Apply saved/URL prices after loadPrices() has populated defaults from
-  // price.json — ensures user overrides win over the bundled defaults.
-  if (_pendingUrlPrices) { Object.assign(prices, _pendingUrlPrices); _pendingUrlPrices = null; }
+  initPriceProfiles();
   encodeStateToUrl(); // normalize URL to compact base36 format on load
   renderAll();
   // Always run once on load to populate usage bars. When auto-solve is off,

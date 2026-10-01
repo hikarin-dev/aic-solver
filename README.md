@@ -11,7 +11,7 @@ Set your production targets, raw resource limits, and facility caps — the solv
 - **Raw resource limits** — cap inputs like ores and water to reflect your outpost's actual yield
 - **Facility limits** — constrain how many of each facility type can run simultaneously
 - **Power consumption** — track battery cost against production income
-- **Item prices** — set sell prices per item; the LP objective maximises net profit/hr
+- **Item prices** — set sell prices per item; the LP objective maximises net profit/hr. Switch between the Wuling and Valley IV outpost price profiles; edits are kept per profile and travel in shared links
 - **Saved productions** — snapshot any result and compare across configurations
 - **Auto-solve** — re-runs the LP on every change; toggle off for manual control
 
